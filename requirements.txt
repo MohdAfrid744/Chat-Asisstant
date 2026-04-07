@@ -1,0 +1,17 @@
+fastapi
+uvicorn
+redis
+faiss-cpu
+sentence-transformers
+langchain
+pypdf
+python-multipart
+numpy
+scikit-learn
+torch
+transformers
+tqdm
+requests
+rank-bm25
+streamlit
+python-multipart
