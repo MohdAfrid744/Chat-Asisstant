@@ -1,6 +1,6 @@
-# 🚀 Offline RAG Chat Assistant
+# 🚀 Offline Hybrid RAG Chat Assistant
 
-> A production-style **Retrieval-Augmented Generation (RAG)** chatbot built for **low latency, high accuracy, and scalable AI-powered document understanding** — featuring hybrid retrieval, multi-level caching, local LLM inference, and a streaming chat UI.
+> A **low-latency offline Retrieval-Augmented Generation (RAG) chatbot** built using **FastAPI, FAISS, BM25, Redis, and Ollama (Mistral)** — featuring hybrid retrieval, multi-level caching, conversational memory, and GPU acceleration.
 
 ---
 
@@ -9,35 +9,32 @@
 - [Overview](#overview)
 - [System Architecture](#system-architecture)
 - [Project Structure](#project-structure)
-- [Document Ingestion Pipeline](#document-ingestion-pipeline)
-- [Query Processing Pipeline](#query-processing-pipeline)
-- [Prompt Strategy](#prompt-strategy)
-- [Caching Strategy](#caching-strategy)
-- [Performance Optimizations](#performance-optimizations)
+- [Key Features](#key-features)
 - [Tech Stack](#tech-stack)
 - [Getting Started](#getting-started)
-- [Key Features](#key-features)
+- [Upload & Query Flow](#upload--query-flow)
+- [Logging](#logging)
 - [Current Limitations](#current-limitations)
 - [Future Enhancements](#future-enhancements)
-- [Performance Highlights](#performance-highlights)
-- [Learning Outcomes](#learning-outcomes)
-- [Example Usage](#example-usage)
+- [Why This Project Matters](#why-this-project-matters)
+- [Author](#author)
 
 ---
 
 ## Overview
 
-This project implements an **offline document-aware AI assistant** that allows users to upload documents, ask natural language questions, retrieve relevant content, generate intelligent responses, and maintain conversation memory.
+This chatbot allows users to upload PDF documents, ask natural language questions, and receive context-aware, document-grounded answers — all **running fully offline with GPU acceleration**.
 
-**Key Objectives:**
-
-| Goal | Approach |
+| Capability | Detail |
 |---|---|
-| Fast response generation | Multi-level Redis caching (Exact + Semantic) |
-| Reduced redundant LLM calls | Cache-first query resolution |
-| Support for similar queries | Embedding-based semantic matching |
-| High retrieval accuracy | Hybrid search (FAISS + BM25) |
-| Scalable, modular design | Async FastAPI backend |
+| Document ingestion | PDF upload → chunk → embed → index |
+| Retrieval | Hybrid search (FAISS vector + BM25 keyword) |
+| Caching | Exact cache + semantic cache via Redis |
+| Memory | Conversation history for follow-up queries |
+| Generation | Local LLM via Ollama (Mistral) |
+| Interface | Streamlit chat UI with streaming output |
+
+The system simulates **real-world enterprise RAG architectures**.
 
 ---
 
@@ -45,8 +42,8 @@ This project implements an **offline document-aware AI assistant** that allows u
 
 ```
 ┌──────────────────────────────────────────┐
-│           User Layer (Streamlit UI)      │
-│  Upload documents · Send queries         │
+│         User Layer (Streamlit UI)        │
+│  Upload PDF · Ask questions · Chat       │
 └───────────────────┬──────────────────────┘
                     │
 ┌───────────────────▼──────────────────────┐
@@ -56,19 +53,37 @@ This project implements an **offline document-aware AI assistant** that allows u
                     │
 ┌───────────────────▼──────────────────────┐
 │             Cache Layer (Redis)          │
-│  Exact Cache  ·  Semantic Cache  ·  TTL  │
+│  Exact Cache  ·  Semantic Cache (FAISS)  │
 └───────────────────┬──────────────────────┘
                     │
 ┌───────────────────▼──────────────────────┐
 │        Hybrid Retrieval Layer            │
-│  FAISS (vector)  ·  BM25 (keyword)       │
+│  FAISS (semantic)  ·  BM25 (keyword)     │
 └───────────────────┬──────────────────────┘
                     │
 ┌───────────────────▼──────────────────────┐
 │        LLM Generation Layer              │
-│  Ollama (Mistral)  ·  Streaming output   │
+│  Ollama (Mistral)  ·  GPU accelerated    │
 └──────────────────────────────────────────┘
 ```
+
+### Processing Flow
+
+| Step | Action |
+|---|---|
+| 1 | Upload PDF document |
+| 2 | Extract text from PDF |
+| 3 | Chunk text dynamically |
+| 4 | Generate embeddings (all-MiniLM-L6-v2) |
+| 5 | Store vectors in FAISS |
+| 6 | Build BM25 keyword index |
+| 7 | Generate document summary (once) |
+| 8 | Receive user query |
+| 9 | Check exact + semantic cache |
+| 10 | Retrieve relevant chunks (hybrid) |
+| 11 | Build prompt with context + memory |
+| 12 | Generate and stream LLM response |
+| 13 | Cache response for future reuse |
 
 ---
 
@@ -78,161 +93,112 @@ This project implements an **offline document-aware AI assistant** that allows u
 RAG-App/
 │
 ├── app/
-│   ├── chunker.py            # Text chunking logic
-│   ├── vector_store.py       # FAISS vector database
-│   ├── bm25_store.py         # BM25 keyword index
+│   ├── __init__.py
+│   ├── main.py               # FastAPI entrypoint
+│   ├── query.py              # Query processing pipeline
+│   ├── ingest.py             # Document ingestion pipeline
 │   ├── cache.py              # Redis cache (exact + semantic)
 │   ├── memory.py             # Conversation memory
-│   ├── ingest.py             # Document ingestion pipeline
-│   ├── query.py              # Query processing pipeline
-│   ├── main.py               # FastAPI app entrypoint
-│   ├── document_manager.py   # Document hash tracking
-│   └── logger.py             # Structured logging
+│   ├── vector_store.py       # FAISS vector database
+│   ├── bm25_store.py         # BM25 keyword index
+│   ├── chunker.py            # Dynamic text chunking
+│   ├── logger.py             # Structured logging
+│   └── document_manager.py   # Document hash tracking
 │
-├── data/                     # Uploaded documents
-├── models/                   # Local model files
+├── data/
+│   └── summary.txt           # Generated document summary
+│
+├── models/
+│   ├── faiss_index.bin       # FAISS vector index
+│   ├── docs.pkl              # Stored document chunks
+│   ├── cache_index.bin       # Semantic cache index
+│   └── cache_data.pkl        # Semantic cache responses
+│
+├── logs/
+│   └── rag_logs.txt          # Performance + query logs
 │
 ├── streamlit_app.py          # Streamlit chat UI
 ├── requirements.txt
-├── test_redis.py
+├── .gitignore
+├── .env.example
 └── README.md
 ```
 
 ---
 
-## Document Ingestion Pipeline
+## Key Features
 
-Documents are processed and indexed via the `/ingest` endpoint.
+### 📄 Document Processing
 
-```
-Upload Document (/ingest)
-        │
-        ▼
-  Text Extraction (PDF)
-        │
-        ▼
-  Chunking
-  ├── Chunk size:  500 characters
-  └── Overlap:     50 characters
-        │
-        ▼
-  Embedding Generation (all-MiniLM-L6-v2)
-        │
-        ▼
-  Store in FAISS Vector DB
-        │
-        ▼
-  Build BM25 Keyword Index
-        │
-        ▼
-  Generate Document Summary (optional)
-```
+- PDF text extraction
+- Dynamic chunk sizing based on document length
+- Overlapping chunk generation for context continuity
+- Document hashing (single ingestion per file)
+- Automatic document summary generation
 
----
+### 🔍 Hybrid Retrieval (FAISS + BM25)
 
-## Query Processing Pipeline
-
-Incoming queries are resolved through a layered cache-first lookup before hitting the LLM.
-
-```
-User Query (/query)
-        │
-        ▼
-  Level 1: Exact Cache ──── HIT ──▶ Return Response
-        │ MISS
-        ▼
-  Level 2: Semantic Cache ── HIT ──▶ Return Response
-        │ MISS
-        ▼
-  Hybrid Retrieval (FAISS + BM25)  ← top_k = 3
-        │
-        ▼
-  Prompt Builder
-  ├── Query
-  ├── Retrieved context chunks
-  └── Conversation history
-        │
-        ▼
-  LLM Generation (Ollama — Mistral)
-        │
-        ▼
-  Cache Response (L1 + L2)
-        │
-        ▼
-  Stream Answer to User
-```
-
----
-
-## Prompt Strategy
-
-The system builds context-aware prompts with a built-in fallback:
-
-| Condition | Behaviour |
-|---|---|
-| **Relevant context found** | Answer grounded in document content |
-| **No context found** | LLM generates independently with disclaimer |
-
-> **Fallback disclaimer:** *"NOTE: The output is generated entirely with AI."*  
-> This reduces hallucination confusion and keeps users informed.
-
----
-
-## Caching Strategy
-
-Multi-level caching is implemented using **Redis** to minimize latency and avoid redundant LLM calls.
-
-### Level 1 — Exact Cache
-
-| Property | Detail |
-|---|---|
-| Key | Raw query string |
-| Value | Cached response |
-| Best for | Identical repeated queries |
-| Speed | Fastest (O(1) hash lookup) |
-
-### Level 2 — Semantic Cache
-
-| Property | Detail |
-|---|---|
-| Key | Query embedding vector |
-| Value | Cached response |
-| Match condition | Cosine similarity ≥ **0.85** |
-| Best for | Paraphrased or semantically similar queries |
-
-### Cache Eviction (TTL)
-
-All cache entries automatically expire to prevent memory overflow:
-
-```
-TTL = 24 hours
-```
-
----
-
-## Performance Optimizations
-
-| Technique | Benefit |
-|---|---|
-| Exact Cache (Redis) | Zero-cost repeat queries |
-| Semantic Cache (Embedding-based) | Handles paraphrased queries |
-| Hybrid Retrieval (FAISS + BM25) | Better recall vs. vector-only search |
-| `top_k = 3` retrieval | Small, focused prompts |
-| Background document processing | Non-blocking ingestion |
-| Streaming response output | Lower perceived latency |
-| Memory-based context handling | Coherent multi-turn conversations |
-| Document hash detection | Avoids re-indexing unchanged files |
-| Async FastAPI endpoints | High concurrency under load |
-| Lightweight embedding model | Fast, CPU-friendly inference |
-
-### Trade-offs
-
-| Area | Advantage | Limitation |
+| Retriever | Method | Strength |
 |---|---|---|
-| **top_k = 3** | Faster response, smaller prompt | Some useful context may be missed |
-| **Semantic threshold 0.85** | High accuracy cache reuse | Requires tuning per dataset |
-| **Fallback responses** | Better user experience | Risk of hallucination without grounding |
-| **CPU-based embeddings** | No GPU required | Slower than GPU inference |
+| **FAISS** | Embedding-based vector search | Semantic similarity |
+| **BM25** | Token-based TF-IDF ranking | Exact keyword matching |
+| **Combined** | Score fusion | Higher precision, fewer hallucinations |
+
+### ⚡ Multi-Level Caching
+
+| Level | Key | Trigger | Result |
+|---|---|---|---|
+| **L1 — Exact Cache** | Raw query string | Identical repeated query | Instant O(1) response |
+| **L2 — Semantic Cache** | Query embedding | Similar query (≥ 0.85 cosine) | Fast cached response |
+
+```
+TTL = 24 hours   (auto-eviction to prevent memory overflow)
+```
+
+### 🧠 Conversational Memory
+
+Stores recent conversation history to enable:
+
+- **Query expansion** — contextualises follow-ups automatically
+- **Context continuity** — answers build on prior exchanges
+- **Follow-up understanding** — no need to repeat context
+
+**Example:**
+```
+User:   "What is supervised learning?"
+User:   "Give examples."
+
+System internally expands to:
+        "Give examples of supervised learning."
+```
+
+### 📊 Dynamic Chunking
+
+Chunk size adjusts automatically based on document length:
+
+| Document Size | Chunk Size |
+|---|---|
+| Small | 300 characters |
+| Medium | 500 characters |
+| Large | 800 characters |
+
+### 🧾 Prompt Design
+
+Every prompt is assembled from four layers for maximum accuracy:
+
+```
+┌─────────────────────────┐
+│   Conversation History  │  ← Maintains continuity
+├─────────────────────────┤
+│   Document Summary      │  ← Global document context
+├─────────────────────────┤
+│   Retrieved Chunks      │  ← Specific relevant content
+├─────────────────────────┤
+│   User Query            │  ← Current question
+└─────────────────────────┘
+```
+
+> **Fallback:** If no relevant context is found, the LLM answers independently and appends: *"NOTE: This response is generated entirely by AI without document context."*
 
 ---
 
@@ -245,32 +211,39 @@ TTL = 24 hours
 | **Vector Database** | FAISS |
 | **Keyword Search** | BM25 |
 | **Cache** | Redis |
-| **Embedding Model** | all-MiniLM-L6-v2 |
-| **LLM** | Ollama (Mistral) |
-| **Language** | Python 3.9+ |
+| **Embedding Model** | all-MiniLM-L6-v2 (SentenceTransformers) |
+| **LLM** | Ollama — Mistral |
+| **GPU Acceleration** | PyTorch (CUDA) |
+| **Language** | Python 3.11 |
+| **Utilities** | NumPy |
 
 ---
 
 ## Getting Started
 
+> Follow these steps **in order**.
+
 ### Prerequisites
 
-- Python 3.9+
-- Docker (for Redis)
+- Python 3.11
+- Docker Desktop (for Redis)
 - [Ollama](https://ollama.com) installed locally
+- NVIDIA GPU (optional but recommended)
+
+---
 
 ### Step 1 — Clone Repository
 
 ```bash
-git clone <repo_url>
+git clone <your-repo-url>
 cd RAG-App
 ```
 
 ### Step 2 — Create Virtual Environment
 
 ```bash
-python -m venv venv
-venv\Scripts\activate
+py -3.11 -m venv venv_gpu
+venv_gpu\Scripts\activate
 ```
 
 ### Step 3 — Install Dependencies
@@ -279,131 +252,171 @@ venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-### Step 4 — Start Redis
+Verify GPU availability:
 
 ```bash
-docker run -d -p 6379:6379 redis
+python -c "import torch; print(torch.cuda.get_device_name(0))"
 ```
 
-Verify it's running:
+Expected output:
+```
+NVIDIA GeForce GTX 1650  (or your available GPU)
+```
+
+### Step 4 — Start Redis (Docker)
+
+Start Docker Desktop first, then run:
+
+```bash
+docker start vibrant_fermi
+```
+
+Optional — clear existing cache:
+
+```bash
+docker exec -it vibrant_fermi redis-cli FLUSHALL
+```
+
+Verify the container is running:
 
 ```bash
 docker ps
 ```
 
-### Step 5 — Pull and Start Ollama (Mistral)
+### Step 5 — Start Ollama
 
 ```bash
-ollama run mistral
+ollama serve
 ```
 
-Then exit the interactive session (`Ctrl+D`). Ollama will continue serving in the background.
+Verify Mistral is available:
+
+```bash
+ollama list
+```
+
+If `mistral:latest` is missing:
+
+```bash
+ollama pull mistral
+```
 
 ### Step 6 — Start the Backend
 
 ```bash
+venv_gpu\Scripts\activate
 uvicorn app.main:app --reload
 ```
 
+API available at: `http://127.0.0.1:8000`
+
 ### Step 7 — Start the Chat UI
 
+Open a new terminal, then:
+
 ```bash
+venv_gpu\Scripts\activate
 streamlit run streamlit_app.py
+```
+
+The UI will open automatically in your browser.
+
+---
+
+## Upload & Query Flow
+
+```
+1. Upload PDF via Streamlit UI
+        │
+        ▼
+2. Wait for background processing (chunking + indexing)
+        │
+        ▼
+3. Ask a natural language question
+        │
+        ▼
+4. Continue the conversation with follow-up questions
+        │
+        ▼
+5. Repeated or similar queries return instantly from cache
 ```
 
 ---
 
-## Key Features
+## Logging
 
-| Feature | Status |
-|---|---|
-| Hybrid Retrieval (FAISS + BM25) | ✅ |
-| Exact Cache (Redis) | ✅ |
-| Semantic Cache (Embedding-based) | ✅ |
-| TTL Cache Eviction | ✅ |
-| Conversation Memory | ✅ |
-| Background Document Ingestion | ✅ |
-| Document Hash Tracking | ✅ |
-| Streaming Responses | ✅ |
-| Local LLM Processing (Offline) | ✅ |
-| Structured Prompt Strategy | ✅ |
-| Fallback AI Generation | ✅ |
-| Document-Level Summaries | ✅ Optional |
+All query performance metrics are logged to `logs/rag_logs.txt`.
+
+**Logged fields:**
+- Query text
+- Cache hit/miss status
+- Retrieval time
+- LLM generation time
+- Total response time
+
+**Example log entry:**
+
+```
+Query     = 'supervised learning'
+Cache     = None
+Retrieval = 0.18s
+LLM       = 1.92s
+Total     = 2.10s
+```
 
 ---
 
 ## Current Limitations
 
-- Supports **PDF files only** (no TXT / Markdown yet)
-- **Single-document** session (no multi-doc retrieval)
-- **CPU-based embeddings** (GPU acceleration optional)
-- **No authentication** system
-- Semantic cache search may slow at very large scale
+| Limitation | Impact |
+|---|---|
+| Single-document processing | Cannot query across multiple PDFs |
+| No reranker | Retrieval precision could be higher |
+| Semantic cache grows indefinitely | Memory usage increases over time |
+| Large PDFs increase ingestion time | Slower startup for heavy documents |
 
 ---
 
 ## Future Enhancements
 
+- [ ] Cross-Encoder reranker for improved retrieval precision
 - [ ] Multi-document support
-- [ ] GPU-accelerated embeddings
-- [ ] Vector DB optimization (e.g. HNSW indexing)
-- [ ] Query ranking improvements (hybrid reranking models)
-- [ ] UI document status tracking
+- [ ] Async ingestion pipeline
+- [ ] Streaming token output
+- [ ] Semantic cache eviction policy
+- [ ] Persistent cross-session chat memory
+- [ ] Multi-user support
 - [ ] Docker Compose deployment
 - [ ] Cloud-ready architecture
-- [ ] Persistent cross-session chat memory
 
 ---
 
-## Performance Highlights
+## Why This Project Matters
 
-| Stage | Optimization |
+This project demonstrates production-relevant skills used across enterprise AI:
+
+| Skill | Application |
 |---|---|
-| Retrieval | Hybrid Search (FAISS + BM25) |
-| Caching | Dual Layer (Exact + Semantic) |
-| Generation | Streaming output |
-| Ingestion | Background processing |
+| Real-world RAG architecture | End-to-end document Q&A pipeline |
+| Hybrid retrieval systems | FAISS + BM25 score fusion |
+| Memory-aware AI workflows | Conversational context continuity |
+| Production-style caching | Multi-level Redis + FAISS cache |
+| GPU acceleration pipelines | PyTorch CUDA for fast inference |
+
+**Used in industries like:**
+- Enterprise AI assistants
+- Knowledge retrieval systems
+- AI copilots
+- Intelligent search engines
 
 ---
 
-## Learning Outcomes
+## Author
 
-This project demonstrates:
+**Mohd Afrid**  
+*AI / ML Engineer*
 
-- ✅ System Design Thinking
-- ✅ RAG Architecture
-- ✅ Cache Optimization
-- ✅ Latency Reduction Techniques
-- ✅ Hybrid Search Implementation
-- ✅ Production-style AI Engineering
-
----
-
-## Example Usage
-
-**1. Upload a document:**
-```
-Machine Learning Notes.pdf
-```
-
-**2. Ask a question:**
-```
-What is unsupervised learning?
-```
-
-**3. System retrieves:**
-```
-Relevant chunk from the uploaded document
-```
-
-**4. Generates:**
-```
-A context-aware, grounded answer using the retrieved content
-```
-
----
-
-> When a user uploads a document, it is processed through chunking and embedding, then indexed in both FAISS and BM25. When a query is received, the system first checks exact and semantic caches. If no match is found, hybrid retrieval fetches the top-k chunks, which are combined with the query and conversation history into a prompt. The LLM generates a streaming response that is cached and returned to the user.
+Focused on building scalable AI systems and real-world ML applications.
 
 ---
 
