@@ -4,27 +4,38 @@ __pycache__/
 *.pyo
 *.pyd
 
-# Virtual environments
+# Virtual Environment
 venv/
 venv_gpu/
 
-# Models
-models/
+# Data folders
 data/
-
-# Logs
+models/
 logs/
-
-# Cache
-*.bin
-*.pkl
-
-# Environment
-.env
-
-# Streamlit
-.streamlit/
 
 # OS files
 .DS_Store
 Thumbs.db
+
+# Streamlit
+.streamlit/
+
+# Environment
+.env
+
+# FAISS / Pickle files
+*.bin
+*.pkl
+
+# Redis dumps
+dump.rdb
+
+# VSCode
+.vscode/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Temp files
+*.log
+*.tmp
