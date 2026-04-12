@@ -1,39 +1,30 @@
 from collections import deque
 
-
 # =========================
-# CHAT MEMORY
+# CONFIG
 # =========================
 
-# Store last N messages
+MAX_MEMORY = 5
 
-chat_memory = deque(
-    maxlen=10
-)
+# Stores last N conversations
+chat_memory = deque(maxlen=MAX_MEMORY)
 
 
 # =========================
 # ADD MEMORY
 # =========================
 
-def add_to_memory(
-    query,
-    response
-):
+def add_to_memory(query, response):
 
-    chat_memory.append(
-        {
-            "role": "user",
-            "content": query
-        }
-    )
+    # Prevent empty entries
 
-    chat_memory.append(
-        {
-            "role": "assistant",
-            "content": response
-        }
-    )
+    if not query or not response:
+        return
+
+    chat_memory.append({
+        "query": str(query),
+        "response": str(response)
+    })
 
 
 # =========================
@@ -46,9 +37,11 @@ def get_memory():
 
 
 # =========================
-# CLEAR MEMORY (Optional)
+# CLEAR MEMORY
 # =========================
 
 def clear_memory():
 
     chat_memory.clear()
+
+    print("🧠 Memory cleared.")
