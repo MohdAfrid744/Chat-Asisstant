@@ -1,98 +1,98 @@
 import streamlit as st
 import requests
 
+# =========================
+# CONFIG
+# =========================
 
 API_URL = "http://127.0.0.1:8000"
-
 
 st.set_page_config(
     page_title="RAG Chat Assistant",
     layout="wide"
 )
 
-
 st.title("🤖 RAG Chat Assistant")
 
-
 # =========================
-# SESSION STATE
+# SESSION STATE INIT
 # =========================
 
 if "messages" not in st.session_state:
-
     st.session_state.messages = []
 
-
-if "uploaded_file_name" not in st.session_state:
-
-    st.session_state.uploaded_file_name = None
+if "uploaded" not in st.session_state:
+    st.session_state.uploaded = False
 
 
 # =========================
 # SIDEBAR
 # =========================
 
-st.sidebar.title("📄 Upload Document")
+st.sidebar.title("📄 Document Panel")
 
+
+# -------------------------
+# New Chat Button
+# -------------------------
+
+if st.sidebar.button("🆕 New Chat"):
+
+    st.session_state.messages = []
+
+    try:
+        requests.get(
+            f"{API_URL}/clear_memory"
+        )
+    except:
+        pass
+
+    st.sidebar.success(
+        "New chat started."
+    )
+
+
+# -------------------------
+# File Upload
+# -------------------------
 
 uploaded_file = st.sidebar.file_uploader(
     "Upload PDF",
     type=["pdf"]
 )
 
-
-# Upload only if new file
-
 if uploaded_file:
 
-    if (
-        st.session_state.uploaded_file_name
-        != uploaded_file.name
+    files = {
+        "file": uploaded_file
+    }
+
+    with st.spinner(
+        "Processing document..."
     ):
 
-        files = {
-            "file": uploaded_file
-        }
+        response = requests.post(
+            f"{API_URL}/ingest",
+            files=files
+        )
 
-        with st.spinner(
-            "Uploading document..."
-        ):
+    if response.status_code == 200:
 
-            response = requests.post(
-                f"{API_URL}/ingest",
-                files=files
-            )
+        st.session_state.uploaded = True
 
-        if response.status_code == 200:
+        st.sidebar.success(
+            response.json()["message"]
+        )
 
-            st.sidebar.success(
-                response.json()["message"]
-            )
+    else:
 
-            st.session_state.uploaded_file_name = (
-                uploaded_file.name
-            )
-
-            # Reset chat for new doc
-
-            st.session_state.messages = []
+        st.sidebar.error(
+            "Upload failed."
+        )
 
 
 # =========================
-# NEW CHAT BUTTON
-# =========================
-
-if st.sidebar.button("🧹 New Chat"):
-
-    st.session_state.messages = []
-
-    st.sidebar.success(
-        "Chat cleared!"
-    )
-
-
-# =========================
-# DISPLAY CHAT
+# DISPLAY CHAT HISTORY
 # =========================
 
 for message in st.session_state.messages:
@@ -114,77 +114,82 @@ if prompt := st.chat_input(
     "Ask your question..."
 ):
 
-    # Save user message
+    if not st.session_state.uploaded:
 
-    st.session_state.messages.append(
-        {
-            "role": "user",
-            "content": prompt
-        }
-    )
+        st.warning(
+            "Please upload a document first."
+        )
 
+    else:
 
-    with st.chat_message("user"):
+        # Add user message
 
-        st.markdown(prompt)
+        st.session_state.messages.append(
+            {
+                "role": "user",
+                "content": prompt
+            }
+        )
 
+        with st.chat_message("user"):
 
-    with st.chat_message("assistant"):
-
-        message_placeholder = st.empty()
-
-        full_response = ""
-
-
-        try:
-
-            response = requests.get(
-                f"{API_URL}/query",
-                params={
-                    "query": prompt
-                },
-                stream=True
-            )
+            st.markdown(prompt)
 
 
-            for chunk in response.iter_content(
-                chunk_size=1024
-            ):
+        # Assistant response
 
-                if chunk:
+        with st.chat_message("assistant"):
 
-                    text = chunk.decode(
-                        "utf-8"
-                    )
+            message_placeholder = st.empty()
 
-                    full_response += text
+            full_response = ""
 
-                    message_placeholder.markdown(
-                        full_response + "▌"
-                    )
+            try:
+
+                response = requests.get(
+                    f"{API_URL}/query",
+                    params={
+                        "query": prompt
+                    },
+                    stream=True
+                )
+
+                for chunk in response.iter_content(
+                    chunk_size=1024
+                ):
+
+                    if chunk:
+
+                        text = chunk.decode(
+                            "utf-8"
+                        )
+
+                        full_response += text
+
+                        message_placeholder.markdown(
+                            full_response + "▌"
+                        )
+
+                message_placeholder.markdown(
+                    full_response
+                )
+
+            except Exception as e:
+
+                full_response = (
+                    "⚠️ Error occurred."
+                )
+
+                message_placeholder.markdown(
+                    full_response
+                )
 
 
-            message_placeholder.markdown(
-                full_response
-            )
+        # Save assistant response
 
-
-        except Exception:
-
-            full_response = (
-                "❌ Error occurred."
-            )
-
-            message_placeholder.markdown(
-                full_response
-            )
-
-
-    # Save assistant message
-
-    st.session_state.messages.append(
-        {
-            "role": "assistant",
-            "content": full_response
-        }
-    )
+        st.session_state.messages.append(
+            {
+                "role": "assistant",
+                "content": full_response
+            }
+        )
