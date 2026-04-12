@@ -1,8 +1,9 @@
 import time
 import requests
+import os
 
 from app.vector_store import retrieve
-from app.bm25_store import bm25_retrieve
+from app.bm25_store import bm25_search
 
 from app.cache import (
     check_exact_cache,
@@ -19,6 +20,79 @@ from app.logger import log_event
 
 
 # =========================
+# LOAD SUMMARY
+# =========================
+
+def load_summary():
+
+    if not os.path.exists("data/summary.txt"):
+
+        return ""
+
+    try:
+
+        with open(
+            "data/summary.txt",
+            "r",
+            encoding="utf-8"
+        ) as f:
+
+            return f.read()
+
+    except:
+
+        with open(
+            "data/summary.txt",
+            "r",
+            encoding="latin-1"
+        ) as f:
+
+            return f.read()
+
+
+# =========================
+# QUERY EXPANSION
+# (CRITICAL FIX)
+# =========================
+
+def expand_query_using_memory(query):
+
+    history = get_memory()
+
+    if not history:
+
+        return query
+
+
+    last_query = history[-1]["query"]
+
+
+    # If query too short → expand
+
+    if len(query.split()) <= 3:
+
+        expanded_query = (
+
+            last_query +
+
+            " " +
+
+            query
+
+        )
+
+        print(
+            "Expanded Query:",
+            expanded_query
+        )
+
+        return expanded_query
+
+
+    return query
+
+
+# =========================
 # HYBRID RETRIEVAL
 # =========================
 
@@ -29,7 +103,7 @@ def hybrid_retrieve(query):
         top_k=3
     )
 
-    bm25_results = bm25_retrieve(
+    bm25_results = bm25_search(
         query,
         top_k=3
     )
@@ -41,42 +115,59 @@ def hybrid_retrieve(query):
         )
     )
 
-    return combined[:3]
+    results = combined[:3]
+
+
+    print(
+        "\n========== RETRIEVED CHUNKS =========="
+    )
+
+    for i, r in enumerate(results):
+
+        print(
+            f"\nChunk {i+1}:\n{r[:200]}"
+        )
+
+    print(
+        "\n======================================"
+    )
+
+    return results
 
 
 # =========================
-# LLM RESPONSE
+# GENERATE RESPONSE
 # =========================
 
 def generate_response(query, context):
 
     history = get_memory()
 
+    summary_text = load_summary()
 
-    # Clean context
-
-    context = [
-        c for c in context
-        if c and c.strip()
-    ]
+    context_text = "\n\n".join(context)
 
 
-    context_text = "\n\n".join(
-        context
-    )
+    # Build history
+
+    history_text = ""
+
+    for item in history:
+
+        history_text += (
+
+            f"User: {item['query']}\n"
+
+            f"Assistant: {item['response']}\n\n"
+
+        )
 
 
-    history_text = "\n".join(
-        [
-            f"{h['role']}: {h['content']}"
-            for h in history[-6:]
-        ]
-    )
+    no_context = False
 
+    if not context_text.strip():
 
-    # Detect empty context properly
-
-    no_context = len(context) == 0
+        no_context = True
 
 
     prompt = f"""
@@ -84,26 +175,26 @@ You are an intelligent AI assistant.
 
 Instructions:
 
-1. If relevant context is available:
-   - Answer using the provided context
-   - Keep answers clear, structured, and concise
-
-2. If NO relevant context is found:
-   - Generate the best possible answer using your own knowledge
-   - At the end of the answer, add this note exactly:
-
-   NOTE: The output is generated entirely with AI.
+- Use retrieved context when available
+- Use document summary when available
+- Maintain conversation continuity
+- Answer only from context when possible
+- If no relevant context exists,
+  generate answer using your own knowledge
 
 Conversation History:
 {history_text}
 
-Context:
+Document Summary:
+{summary_text}
+
+Retrieved Context:
 {context_text}
 
 User Question:
 {query}
 
-Answer:
+Answer clearly.
 """
 
 
@@ -112,13 +203,16 @@ Answer:
         response = requests.post(
             "http://localhost:11434/api/generate",
             json={
+
                 "model": "mistral",
+
                 "prompt": prompt,
+
                 "stream": False
+
             },
             timeout=120
         )
-
 
         result = response.json()
 
@@ -127,24 +221,21 @@ Answer:
             "No response generated."
         )
 
-
     except Exception as e:
 
         print("LLM Error:", e)
 
-        answer = (
-            "Error generating response."
-        )
+        answer = "Error generating response."
 
-
-    # Add disclaimer if no context
 
     if no_context:
 
         answer += (
-            "\n\n⚠️ Note: "
-            "This response was generated "
-            "entirely using AI knowledge."
+
+            "\n\nNOTE: "
+
+            "The output is generated entirely with AI."
+
         )
 
 
@@ -186,18 +277,31 @@ def process_query(query):
         return semantic_cached, "⚡ Semantic Cache Hit"
 
 
+    # Expand Query (KEY FIX)
+
+    expanded_query = expand_query_using_memory(
+        query
+    )
+
+
     # Retrieval
 
     retrieval_start = time.time()
 
-    context = hybrid_retrieve(query)
+    context = hybrid_retrieve(
+        expanded_query
+    )
 
     retrieval_time = (
-        time.time() - retrieval_start
+
+        time.time() -
+
+        retrieval_start
+
     )
 
 
-    # LLM Generation
+    # LLM
 
     llm_start = time.time()
 
@@ -207,7 +311,11 @@ def process_query(query):
     )
 
     llm_time = (
-        time.time() - llm_start
+
+        time.time() -
+
+        llm_start
+
     )
 
 
@@ -228,16 +336,24 @@ def process_query(query):
 
 
     total_time = (
-        time.time() - start_time
+
+        time.time() -
+
+        start_time
+
     )
 
 
     log_event(
+
         f"Query='{query}' | "
-        f"Cache=None | "
+
         f"Retrieval={retrieval_time:.2f}s | "
+
         f"LLM={llm_time:.2f}s | "
+
         f"Total={total_time:.2f}s"
+
     )
 
 
