@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, BackgroundTasks
+from fastapi import FastAPI, UploadFile, File
 from fastapi.responses import JSONResponse, StreamingResponse
 
 import shutil
@@ -14,7 +14,6 @@ app = FastAPI(
     title="Offline RAG Assistant",
     version="5.0"
 )
-
 
 UPLOAD_DIR = "data"
 
@@ -32,17 +31,16 @@ os.makedirs(
 def root():
 
     return {
-        "message": "RAG System Running"
+        "message": "RAG System Running 🚀"
     }
 
 
 # =========================
-# INGEST (BACKGROUND)
+# INGEST DOCUMENT
 # =========================
 
 @app.post("/ingest")
 async def upload_document(
-    background_tasks: BackgroundTasks,
     file: UploadFile = File(...)
 ):
 
@@ -50,6 +48,8 @@ async def upload_document(
         UPLOAD_DIR,
         file.filename
     )
+
+    # Save uploaded file
 
     with open(
         file_path,
@@ -61,23 +61,14 @@ async def upload_document(
             buffer
         )
 
+    # Check if document changed
 
     if is_new_document(file_path):
 
-        # Clear old memory
-
-        clear_memory()
-
-        # Run ingestion in background
-
-        background_tasks.add_task(
-            ingest_document,
-            file_path
-        )
+        ingest_document(file_path)
 
         message = (
-            "Document uploaded. "
-            "Processing in background..."
+            "New document ingested successfully."
         )
 
     else:
@@ -85,7 +76,6 @@ async def upload_document(
         message = (
             "Document already processed."
         )
-
 
     return JSONResponse(
         content={
@@ -95,7 +85,7 @@ async def upload_document(
 
 
 # =========================
-# QUERY
+# QUERY SYSTEM
 # =========================
 
 @app.get("/query")
@@ -112,8 +102,21 @@ async def query_system(query: str):
             f"{response}"
         )
 
-
     return StreamingResponse(
         stream_response(),
         media_type="text/plain"
     )
+
+
+# =========================
+# CLEAR MEMORY
+# =========================
+
+@app.get("/clear_memory")
+def clear_chat_memory():
+
+    clear_memory()
+
+    return {
+        "message": "Memory cleared."
+    }
