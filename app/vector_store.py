@@ -1,16 +1,28 @@
-from sentence_transformers import SentenceTransformer
 import faiss
 import numpy as np
 import pickle
 import os
+import torch
+
+from sentence_transformers import SentenceTransformer
 
 
 # =========================
-# LOAD MODEL (ONCE)
+# DEVICE SETUP (GPU/CPU)
+# =========================
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
+print(f"Embedding device: {device}")
+
+
+# =========================
+# MODEL LOAD
 # =========================
 
 model = SentenceTransformer(
-    "all-MiniLM-L6-v2"
+    "all-MiniLM-L6-v2",
+    device=device
 )
 
 
@@ -23,18 +35,22 @@ DOCS_PATH = "models/docs.pkl"
 
 
 # =========================
-# LOAD EXISTING INDEX
+# LOAD OR CREATE INDEX
 # =========================
 
 dimension = 384
 
 if os.path.exists(INDEX_PATH):
 
+    print("Loading existing FAISS index...")
+
     index = faiss.read_index(
         INDEX_PATH
     )
 
 else:
+
+    print("Creating new FAISS index...")
 
     index = faiss.IndexFlatL2(
         dimension
@@ -66,22 +82,32 @@ else:
 def add_documents(chunks):
 
     global documents
-    global index
 
     if not chunks:
 
         return
 
 
-    embeddings = model.encode(
-        chunks
+    print(
+        f"Generating embeddings for {len(chunks)} chunks..."
     )
+
+
+    embeddings = model.encode(
+        chunks,
+        batch_size=16,
+        show_progress_bar=True
+    )
+
 
     index.add(
         np.array(embeddings)
     )
 
-    documents.extend(chunks)
+
+    documents.extend(
+        chunks
+    )
 
 
     os.makedirs(
@@ -90,11 +116,15 @@ def add_documents(chunks):
     )
 
 
+    # Save FAISS index
+
     faiss.write_index(
         index,
         INDEX_PATH
     )
 
+
+    # Save documents
 
     with open(
         DOCS_PATH,
@@ -107,8 +137,11 @@ def add_documents(chunks):
         )
 
 
+    print("FAISS index updated.")
+
+
 # =========================
-# RETRIEVE FUNCTION ⭐
+# RETRIEVE FUNCTION
 # =========================
 
 def retrieve(query, top_k=3):
