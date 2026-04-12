@@ -1,12 +1,14 @@
 import redis
 import json
 import numpy as np
+import faiss
+import os
 
 from sentence_transformers import SentenceTransformer
 
 
 # =========================
-# REDIS CONNECTION
+# REDIS
 # =========================
 
 redis_client = redis.Redis(
@@ -17,7 +19,7 @@ redis_client = redis.Redis(
 
 
 # =========================
-# LOAD MODEL ONCE
+# MODEL (GPU ENABLED)
 # =========================
 
 model = SentenceTransformer(
@@ -25,7 +27,68 @@ model = SentenceTransformer(
 )
 
 
-SIMILARITY_THRESHOLD = 0.85
+# =========================
+# SETTINGS
+# =========================
+
+SIMILARITY_THRESHOLD = 0.65
+
+CACHE_INDEX_PATH = "models/cache_index.bin"
+CACHE_DATA_PATH = "models/cache_data.json"
+
+dimension = 384
+
+
+# =========================
+# LOAD / CREATE FAISS
+# =========================
+
+if os.path.exists(CACHE_INDEX_PATH):
+
+    cache_index = faiss.read_index(
+        CACHE_INDEX_PATH
+    )
+
+    print("Loaded semantic cache index.")
+
+else:
+
+    cache_index = faiss.IndexFlatIP(
+        dimension
+    )
+
+    print("Created new semantic cache index.")
+
+
+# =========================
+# LOAD CACHE DATA
+# =========================
+
+if os.path.exists(CACHE_DATA_PATH):
+
+    with open(
+        CACHE_DATA_PATH,
+        "r"
+    ) as f:
+
+        cache_data = json.load(f)
+
+else:
+
+    cache_data = []
+
+
+# =========================
+# NORMALIZE EMBEDDING
+# =========================
+
+def normalize(vec):
+
+    vec = np.array(vec).astype("float32")
+
+    faiss.normalize_L2(vec)
+
+    return vec
 
 
 # =========================
@@ -44,73 +107,46 @@ def check_exact_cache(query):
 
 
 # =========================
-# COSINE SIMILARITY
-# =========================
-
-def cosine_similarity(a, b):
-
-    return np.dot(a, b) / (
-
-        np.linalg.norm(a)
-
-        * np.linalg.norm(b)
-
-    )
-
-
-# =========================
 # SEMANTIC CACHE
 # =========================
 
 def check_semantic_cache(query):
 
-    query_embedding = model.encode(
-        [query]
-    )[0]
+    if cache_index.ntotal == 0:
+
+        return None
 
 
-    # Use scan_iter (FAST)
+    query_embedding = model.encode([query])
 
-    for key in redis_client.scan_iter(
-        "embed:*"
-    ):
-
-        stored_embedding = np.array(
-
-            json.loads(
-
-                redis_client.get(key)
-
-            )
-
-        )
+    query_embedding = normalize(
+        query_embedding
+    )
 
 
-        similarity = cosine_similarity(
-
-            query_embedding,
-
-            stored_embedding
-
-        )
+    distances, indices = cache_index.search(
+        query_embedding,
+        1
+    )
 
 
-        if similarity >= SIMILARITY_THRESHOLD:
+    similarity = distances[0][0]
 
-            response_key = key.replace(
-
-                "embed:",
-
-                "response:"
-
-            )
+    print(
+        "Semantic similarity:",
+        similarity
+    )
 
 
-            return redis_client.get(
+    if similarity >= SIMILARITY_THRESHOLD:
 
-                response_key
+        idx = indices[0][0]
 
-            )
+        if idx < len(cache_data):
+
+            print("⚡ Semantic Cache Hit")
+
+            return cache_data[idx]["response"]
 
 
     return None
@@ -125,46 +161,55 @@ def store_cache(query, response):
     # Exact cache
 
     redis_client.set(
-
         query,
-
         response,
-
         ex=86400
+    )
+
+
+    embedding = model.encode([query])
+
+    embedding = normalize(
+        embedding
+    )
+
+
+    cache_index.add(embedding)
+
+
+    cache_data.append({
+
+        "query": query,
+
+        "response": response
+
+    })
+
+
+    faiss.write_index(
+
+        cache_index,
+
+        CACHE_INDEX_PATH
 
     )
 
 
-    # Semantic cache
+    with open(
 
-    embedding = model.encode(
+        CACHE_DATA_PATH,
 
-        [query]
+        "w"
 
-    )[0]
+    ) as f:
 
+        json.dump(
 
-    redis_client.set(
+            cache_data,
 
-        f"embed:{query}",
+            f
 
-        json.dumps(
-
-            embedding.tolist()
-
-        ),
-
-        ex=86400
-
-    )
+        )
 
 
-    redis_client.set(
-
-        f"response:{query}",
-
-        response,
-
-        ex=86400
-
-    )
+    print("💾 Cached in FAISS.")
