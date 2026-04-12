@@ -1,17 +1,58 @@
+# =========================
+# Core Backend
+# =========================
+
 fastapi
 uvicorn
-redis
+
+# =========================
+# Vector Search
+# =========================
+
 faiss-cpu
 sentence-transformers
-langchain
-pypdf
-python-multipart
 numpy
-scikit-learn
+
+# =========================
+# Hybrid Search
+# =========================
+
+rank-bm25
+
+# =========================
+# Document Processing
+# =========================
+
+pypdf
+
+# =========================
+# Caching
+# =========================
+
+redis
+
+# =========================
+# LLM Communication
+# =========================
+
+requests
+
+# =========================
+# Frontend
+# =========================
+
+streamlit
+
+# =========================
+# Utilities
+# =========================
+
+python-multipart
+tqdm
+
+# =========================
+# ML / Torch (GPU Support)
+# =========================
+
 torch
 transformers
-tqdm
-requests
-rank-bm25
-streamlit
-python-multipart
