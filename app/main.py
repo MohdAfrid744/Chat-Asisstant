@@ -1,19 +1,30 @@
+# app/main.py
+
 from fastapi import FastAPI, UploadFile, File
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse
 
 import shutil
 import os
+import time
 
 from app.ingest import ingest_document
 from app.query import process_query
 from app.document_manager import is_new_document
-from app.memory import clear_memory
 
+
+# =========================
+# FASTAPI INIT
+# =========================
 
 app = FastAPI(
     title="Offline RAG Assistant",
-    version="5.0"
+    version="6.0"
 )
+
+
+# =========================
+# CONFIG
+# =========================
 
 UPLOAD_DIR = "data"
 
@@ -21,6 +32,13 @@ os.makedirs(
     UPLOAD_DIR,
     exist_ok=True
 )
+
+
+SUPPORTED_EXTENSIONS = [
+    ".pdf",
+    ".txt",
+    ".md"
+]
 
 
 # =========================
@@ -31,7 +49,8 @@ os.makedirs(
 def root():
 
     return {
-        "message": "RAG System Running 🚀"
+        "status": "running",
+        "message": "RAG System Ready"
     }
 
 
@@ -44,44 +63,91 @@ async def upload_document(
     file: UploadFile = File(...)
 ):
 
-    file_path = os.path.join(
-        UPLOAD_DIR,
-        file.filename
-    )
+    try:
 
-    # Save uploaded file
+        start_time = time.time()
 
-    with open(
-        file_path,
-        "wb"
-    ) as buffer:
+        filename = file.filename
 
-        shutil.copyfileobj(
-            file.file,
-            buffer
+        file_extension = os.path.splitext(
+            filename
+        )[1].lower()
+
+
+        # Validate file type
+
+        if file_extension not in SUPPORTED_EXTENSIONS:
+
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "message":
+                    "Unsupported file type.",
+                    "processing_time": 0
+                }
+            )
+
+
+        file_path = os.path.join(
+            UPLOAD_DIR,
+            filename
         )
 
-    # Check if document changed
 
-    if is_new_document(file_path):
+        # Save file
 
-        ingest_document(file_path)
+        with open(
+            file_path,
+            "wb"
+        ) as buffer:
 
-        message = (
-            "New document ingested successfully."
+            shutil.copyfileobj(
+                file.file,
+                buffer
+            )
+
+
+        # Check if new document
+
+        if is_new_document(file_path):
+
+            processing_time = ingest_document(
+                file_path
+            )
+
+            return JSONResponse(
+                content={
+                    "message":
+                    "Document processed successfully.",
+                    "processing_time":
+                    round(processing_time, 2)
+                }
+            )
+
+
+        else:
+
+            return JSONResponse(
+                content={
+                    "message":
+                    "Document already processed.",
+                    "processing_time": 0
+                }
+            )
+
+
+    except Exception as e:
+
+        print("INGEST ERROR:", e)
+
+        return JSONResponse(
+            status_code=500,
+            content={
+                "message":
+                "Document processing failed.",
+                "processing_time": 0
+            }
         )
-
-    else:
-
-        message = (
-            "Document already processed."
-        )
-
-    return JSONResponse(
-        content={
-            "message": message
-        }
-    )
 
 
 # =========================
@@ -91,32 +157,41 @@ async def upload_document(
 @app.get("/query")
 async def query_system(query: str):
 
-    def stream_response():
+    try:
 
         response, source = process_query(
             query
         )
 
-        yield (
-            f"{source}\n\n"
-            f"{response}"
+        return JSONResponse(
+            content={
+                "response": response,
+                "source": source
+            }
         )
 
-    return StreamingResponse(
-        stream_response(),
-        media_type="text/plain"
-    )
+    except Exception as e:
+
+        print("QUERY ERROR:", e)
+
+        return JSONResponse(
+            status_code=500,
+            content={
+                "response":
+                "⚠️ Error generating response.",
+                "source":
+                "❌ System Error"
+            }
+        )
 
 
 # =========================
-# CLEAR MEMORY
+# HEALTH CHECK
 # =========================
 
-@app.get("/clear_memory")
-def clear_chat_memory():
-
-    clear_memory()
+@app.get("/health")
+def health_check():
 
     return {
-        "message": "Memory cleared."
+        "status": "healthy"
     }
