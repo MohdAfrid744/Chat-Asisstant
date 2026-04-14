@@ -1,4 +1,8 @@
+# app/ingest.py
+
 import os
+import json
+import time
 import requests
 
 from pypdf import PdfReader
@@ -12,21 +16,76 @@ from app.bm25_store import build_bm25_index
 # TEXT EXTRACTION
 # =========================
 
-def extract_text_from_pdf(file_path):
+def extract_text(file_path):
 
-    reader = PdfReader(file_path)
+    ext = os.path.splitext(file_path)[1]
 
     text = ""
 
-    for page in reader.pages:
+    if ext == ".pdf":
 
-        page_text = page.extract_text()
+        reader = PdfReader(file_path)
 
-        if page_text:
+        for page in reader.pages:
 
-            text += page_text
+            page_text = page.extract_text()
+
+            if page_text:
+
+                text += page_text
+
+    elif ext in [".txt", ".md"]:
+
+        with open(
+            file_path,
+            "r",
+            encoding="utf-8",
+            errors="ignore"
+        ) as f:
+
+            text = f.read()
+
+    else:
+
+        raise ValueError(
+            "Unsupported file format."
+        )
 
     return text
+
+
+# =========================
+# DYNAMIC CHUNKING
+# =========================
+
+def dynamic_chunking(text):
+
+    text_length = len(text)
+
+    if text_length < 2000:
+
+        chunk_size = 300
+        overlap = 50
+
+    elif text_length < 10000:
+
+        chunk_size = 500
+        overlap = 80
+
+    else:
+
+        chunk_size = 800
+        overlap = 120
+
+    print(
+        f"Dynamic chunk_size={chunk_size}, overlap={overlap}"
+    )
+
+    return chunk_text(
+        text,
+        chunk_size,
+        overlap
+    )
 
 
 # =========================
@@ -37,8 +96,6 @@ def generate_summary(text):
 
     print("\nGenerating summary...")
 
-    # Skip summary for small docs
-
     if len(text) < 1500:
 
         print("Short document — skipping summary.")
@@ -48,7 +105,6 @@ def generate_summary(text):
 
     short_text = text[:2000]
 
-
     prompt = f"""
 Summarize the following document
 in 5–7 clear sentences.
@@ -56,7 +112,6 @@ in 5–7 clear sentences.
 Document:
 {short_text}
 """
-
 
     try:
 
@@ -66,7 +121,8 @@ Document:
                 "model": "mistral",
                 "prompt": prompt,
                 "stream": False
-            }
+            },
+            timeout=60
         )
 
         result = response.json()
@@ -84,10 +140,12 @@ Document:
 
 
 # =========================
-# MAIN INGEST FUNCTION
+# MAIN INGEST
 # =========================
 
 def ingest_document(file_path):
+
+    start_time = time.time()
 
     print("\n========== INGEST START ==========")
 
@@ -96,77 +154,84 @@ def ingest_document(file_path):
 
     print("\nStep 1: Extracting text...")
 
-    text = extract_text_from_pdf(
-        file_path
-    )
+    text = extract_text(file_path)
 
     if not text:
 
         raise ValueError(
-            "No text extracted from document."
+            "No text extracted."
         )
 
     print("Text length:", len(text))
 
 
-    # Step 2 — Chunk text
+    # Step 2 — Chunking
 
     print("\nStep 2: Chunking text...")
 
-    chunks = chunk_text(text)
+    chunks = dynamic_chunking(text)
 
     print("Chunks created:", len(chunks))
 
 
-    if not chunks:
+    # Save metadata
 
-        raise ValueError(
-            "No chunks created."
-        )
+    metadata = {
+
+        "chunk_count": len(chunks),
+        "text_length": len(text)
+
+    }
+
+    os.makedirs("data", exist_ok=True)
+
+    with open(
+        "data/doc_metadata.json",
+        "w"
+    ) as f:
+
+        json.dump(metadata, f)
 
 
-    # Step 3 — Create embeddings
+    # Step 3 — Embeddings
 
     print("\nStep 3: Creating embeddings...")
 
     add_documents(chunks)
 
-    print("Embeddings created successfully.")
+    print("Embeddings created.")
 
 
-    # Step 4 — Build BM25
+    # Step 4 — BM25
 
     print("\nStep 4: Building BM25 index...")
 
     build_bm25_index(chunks)
 
-    print("BM25 index built.")
+    print("BM25 built.")
 
 
-    # Step 5 — Generate summary
+    # Step 5 — Summary
 
     print("\nStep 5: Generating summary...")
 
     summary = generate_summary(text)
 
-    print("Summary created.")
-
-
-    # Step 6 — Save summary
-
-    print("\nStep 6: Saving summary...")
-
-    os.makedirs(
-        "data",
-        exist_ok=True
-    )
 
     with open(
         "data/summary.txt",
-        "w"
+        "w",
+        encoding="utf-8",
+        errors="ignore"
     ) as f:
 
         f.write(summary)
 
 
-    print("\n✅ INGEST COMPLETE")
+    total_time = time.time() - start_time
+
+    print(
+        f"\n✅ INGEST COMPLETE ({total_time:.2f}s)"
+    )
+
+    return total_time
