@@ -1,6 +1,8 @@
+# app/query.py
+
 import time
 import requests
-import os
+import numpy as np
 
 from app.vector_store import retrieve
 from app.bm25_store import bm25_search
@@ -17,79 +19,114 @@ from app.memory import (
 )
 
 from app.logger import log_event
+from app.model_loader import embedding_model
 
 
 # =========================
-# LOAD SUMMARY
+# CONFIG
 # =========================
 
-def load_summary():
+MIN_CONTEXT_REQUIRED = 1
 
-    if not os.path.exists("data/summary.txt"):
-
-        return ""
-
-    try:
-
-        with open(
-            "data/summary.txt",
-            "r",
-            encoding="utf-8"
-        ) as f:
-
-            return f.read()
-
-    except:
-
-        with open(
-            "data/summary.txt",
-            "r",
-            encoding="latin-1"
-        ) as f:
-
-            return f.read()
+MIN_THRESHOLD = 0.20
+MAX_THRESHOLD = 0.40
 
 
 # =========================
-# QUERY EXPANSION
-# (CRITICAL FIX)
+# COSINE SIMILARITY
 # =========================
 
-def expand_query_using_memory(query):
+def cosine_similarity(a, b):
 
-    history = get_memory()
+    a = a / np.linalg.norm(a)
+    b = b / np.linalg.norm(b)
 
-    if not history:
-
-        return query
-
-
-    last_query = history[-1]["query"]
+    return np.dot(a, b)
 
 
-    # If query too short → expand
+# =========================
+# ADAPTIVE THRESHOLD
+# =========================
 
-    if len(query.split()) <= 3:
+def compute_dynamic_threshold(similarities):
 
-        expanded_query = (
+    if not similarities:
+        return 0.25
 
-            last_query +
+    chunk_count = len(similarities)
 
-            " " +
+    avg_sim = np.mean(similarities)
 
-            query
+    if chunk_count < 10:
 
+        threshold = 0.20
+
+    else:
+
+        threshold = avg_sim * 0.6
+
+    threshold = max(
+        MIN_THRESHOLD,
+        min(MAX_THRESHOLD, threshold)
+    )
+
+    print(f"Average similarity: {avg_sim:.3f}")
+    print(f"Dynamic threshold: {threshold:.3f}")
+
+    return threshold
+
+
+# =========================
+# CONTEXT FILTER
+# =========================
+
+def adaptive_filter(query, chunks):
+
+    if not chunks:
+        return []
+
+    query_emb = embedding_model.encode(query)
+
+    chunk_embeddings = embedding_model.encode(
+        chunks
+    )
+
+    similarities = []
+
+    for chunk_emb in chunk_embeddings:
+
+        sim = cosine_similarity(
+            query_emb,
+            chunk_emb
         )
 
-        print(
-            "Expanded Query:",
-            expanded_query
-        )
+        similarities.append(sim)
 
-        return expanded_query
+    threshold = compute_dynamic_threshold(
+        similarities
+    )
 
+    filtered = []
 
-    return query
+    for i, sim in enumerate(similarities):
+
+        if sim >= threshold:
+
+            filtered.append(
+                chunks[i]
+            )
+
+    if len(filtered) < MIN_CONTEXT_REQUIRED:
+
+        print("Fallback activated.")
+
+        return chunks[:3]
+
+    print(
+        f"Filtered {len(filtered)} relevant chunks"
+    )
+
+    return filtered[:3]
 
 
 # =========================
@@ -100,12 +137,12 @@ def hybrid_retrieve(query):
 
     vector_results = retrieve(
         query,
-        top_k=3
+        top_k=5
     )
 
     bm25_results = bm25_search(
         query,
-        top_k=3
+        top_k=5
     )
 
     combined = list(
@@ -115,127 +152,109 @@ def hybrid_retrieve(query):
         )
     )
 
-    results = combined[:3]
-
-
-    print(
-        "\n========== RETRIEVED CHUNKS =========="
+    return adaptive_filter(
+        query,
+        combined
     )
-
-    for i, r in enumerate(results):
-
-        print(
-            f"\nChunk {i+1}:\n{r[:200]}"
-        )
-
-    print(
-        "\n======================================"
-    )
-
-    return results
 
 
 # =========================
-# GENERATE RESPONSE
+# LOAD SUMMARY
+# =========================
+
+def load_summary():
+
+    try:
+
+        with open(
+            "data/summary.txt",
+            "r",
+            encoding="utf-8",
+            errors="ignore"
+        ) as f:
+
+            return f.read()
+
+    except:
+
+        return ""
+
+
+# =========================
+# RESPONSE GENERATION
 # =========================
 
 def generate_response(query, context):
 
     history = get_memory()
 
-    summary_text = load_summary()
-
-    context_text = "\n\n".join(context)
-
-
-    # Build history
-
     history_text = ""
 
     for item in history:
 
         history_text += (
-
             f"User: {item['query']}\n"
-
             f"Assistant: {item['response']}\n\n"
-
         )
 
+    context_text = "\n\n".join(context)
 
-    no_context = False
+    summary_text = load_summary()
 
-    if not context_text.strip():
-
-        no_context = True
+    has_context = len(context) > 0
 
 
     prompt = f"""
 You are an intelligent AI assistant.
 
-Instructions:
-
-- Use retrieved context when available
-- Use document summary when available
-- Maintain conversation continuity
-- Answer only from context when possible
-- If no relevant context exists,
-  generate answer using your own knowledge
-
-Conversation History:
-{history_text}
+Retrieved Context:
+{context_text}
 
 Document Summary:
 {summary_text}
 
-Retrieved Context:
-{context_text}
+Conversation History:
+{history_text}
 
 User Question:
 {query}
 
-Answer clearly.
+RULES:
+
+1. If context exists — answer from context.
+2. Maintain conversation continuity.
+3. If context does NOT exist — answer using general knowledge.
+4. Do NOT mention context in response.
+5. Keep answers concise.
+
+Answer:
 """
 
 
-    try:
+    response = requests.post(
+        "http://localhost:11434/api/generate",
+        json={
+            "model": "mistral",
+            "prompt": prompt,
+            "stream": False
+        }
+    )
 
-        response = requests.post(
-            "http://localhost:11434/api/generate",
-            json={
+    result = response.json()
 
-                "model": "mistral",
-
-                "prompt": prompt,
-
-                "stream": False
-
-            },
-            timeout=120
-        )
-
-        result = response.json()
-
-        answer = result.get(
-            "response",
-            "No response generated."
-        )
-
-    except Exception as e:
-
-        print("LLM Error:", e)
-
-        answer = "Error generating response."
+    answer = result.get(
+        "response",
+        "No response generated."
+    )
 
 
-    if no_context:
+    # Only add NOTE if context missing
+
+    if not has_context:
 
         answer += (
-
             "\n\nNOTE: "
-
             "The output is generated entirely with AI."
-
         )
 
 
@@ -243,7 +262,7 @@ Answer clearly.
 
 
 # =========================
-# MAIN QUERY FUNCTION
+# MAIN QUERY
 # =========================
 
 def process_query(query):
@@ -251,75 +270,37 @@ def process_query(query):
     start_time = time.time()
 
 
-    # Exact Cache
-
     cached = check_exact_cache(query)
 
     if cached:
 
-        log_event(
-            f"Query='{query}' | Cache=Exact"
-        )
-
         return cached, "⚡ Exact Cache Hit"
 
 
-    # Semantic Cache
+    semantic = check_semantic_cache(query)
 
-    semantic_cached = check_semantic_cache(query)
+    if semantic:
 
-    if semantic_cached:
-
-        log_event(
-            f"Query='{query}' | Cache=Semantic"
-        )
-
-        return semantic_cached, "⚡ Semantic Cache Hit"
+        return semantic, "⚡ Semantic Cache Hit"
 
 
-    # Expand Query (KEY FIX)
-
-    expanded_query = expand_query_using_memory(
-        query
-    )
+    context = hybrid_retrieve(query)
 
 
-    # Retrieval
+    print("\n========== RETRIEVED CHUNKS ==========")
 
-    retrieval_start = time.time()
+    for i, c in enumerate(context):
 
-    context = hybrid_retrieve(
-        expanded_query
-    )
+        print(f"\nChunk {i+1}:\n{c}")
 
-    retrieval_time = (
+    print("\n======================================")
 
-        time.time() -
-
-        retrieval_start
-
-    )
-
-
-    # LLM
-
-    llm_start = time.time()
 
     response = generate_response(
         query,
         context
     )
 
-    llm_time = (
-
-        time.time() -
-
-        llm_start
-
-    )
-
-
-    # Store memory
 
     add_to_memory(
         query,
@@ -327,33 +308,17 @@ def process_query(query):
     )
 
 
-    # Store cache
-
     store_cache(
         query,
         response
     )
 
 
-    total_time = (
-
-        time.time() -
-
-        start_time
-
-    )
-
+    total_time = time.time() - start_time
 
     log_event(
-
         f"Query='{query}' | "
-
-        f"Retrieval={retrieval_time:.2f}s | "
-
-        f"LLM={llm_time:.2f}s | "
-
         f"Total={total_time:.2f}s"
-
     )
 
 
