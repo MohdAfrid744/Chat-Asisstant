@@ -1,11 +1,11 @@
+# streamlit_app.py
+
 import streamlit as st
 import requests
 
-# =========================
-# CONFIG
-# =========================
 
 API_URL = "http://127.0.0.1:8000"
+
 
 st.set_page_config(
     page_title="RAG Chat Assistant",
@@ -14,85 +14,107 @@ st.set_page_config(
 
 st.title("🤖 RAG Chat Assistant")
 
+
 # =========================
-# SESSION STATE INIT
+# SESSION STATE
 # =========================
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-if "uploaded" not in st.session_state:
-    st.session_state.uploaded = False
+if "status_message" not in st.session_state:
+    st.session_state.status_message = None
+
+if "uploaded_filename" not in st.session_state:
+    st.session_state.uploaded_filename = None
 
 
 # =========================
-# SIDEBAR
+# FILE UPLOAD
 # =========================
 
-st.sidebar.title("📄 Document Panel")
+st.sidebar.title("📄 Upload Document")
+
+uploaded_file = st.sidebar.file_uploader(
+    "Upload File",
+    type=["pdf", "txt", "md"]
+)
 
 
-# -------------------------
-# New Chat Button
-# -------------------------
+# Only upload once per file
+
+if (
+    uploaded_file
+    and uploaded_file.name
+    != st.session_state.uploaded_filename
+):
+
+    files = {"file": uploaded_file}
+
+    with st.spinner("Processing document..."):
+
+        try:
+
+            response = requests.post(
+                f"{API_URL}/ingest",
+                files=files
+            )
+
+            if response.status_code == 200:
+
+                data = response.json()
+
+                time_taken = data.get(
+                    "processing_time",
+                    0
+                )
+
+                st.session_state.status_message = (
+                    f"✅ Document ready "
+                    f"(Processed in {time_taken}s)"
+                )
+
+                st.session_state.uploaded_filename = (
+                    uploaded_file.name
+                )
+
+            else:
+
+                st.session_state.status_message = (
+                    "⚠️ Upload failed."
+                )
+
+        except Exception:
+
+            st.session_state.status_message = (
+                "⚠️ Backend not reachable."
+            )
+
+
+# =========================
+# STATUS MESSAGE
+# =========================
+
+if st.session_state.status_message:
+
+    st.success(
+        st.session_state.status_message
+    )
+
+
+# =========================
+# NEW CHAT BUTTON
+# =========================
 
 if st.sidebar.button("🆕 New Chat"):
 
     st.session_state.messages = []
 
-    try:
-        requests.get(
-            f"{API_URL}/clear_memory"
-        )
-    except:
-        pass
-
-    st.sidebar.success(
-        "New chat started."
-    )
-
-
-# -------------------------
-# File Upload
-# -------------------------
-
-uploaded_file = st.sidebar.file_uploader(
-    "Upload PDF",
-    type=["pdf"]
-)
-
-if uploaded_file:
-
-    files = {
-        "file": uploaded_file
-    }
-
-    with st.spinner(
-        "Processing document..."
-    ):
-
-        response = requests.post(
-            f"{API_URL}/ingest",
-            files=files
-        )
-
-    if response.status_code == 200:
-
-        st.session_state.uploaded = True
-
-        st.sidebar.success(
-            response.json()["message"]
-        )
-
-    else:
-
-        st.sidebar.error(
-            "Upload failed."
-        )
+    st.session_state.status_message = None
 
 
 # =========================
-# DISPLAY CHAT HISTORY
+# DISPLAY CHAT
 # =========================
 
 for message in st.session_state.messages:
@@ -100,7 +122,6 @@ for message in st.session_state.messages:
     with st.chat_message(
         message["role"]
     ):
-
         st.markdown(
             message["content"]
         )
@@ -110,86 +131,85 @@ for message in st.session_state.messages:
 # USER INPUT
 # =========================
 
-if prompt := st.chat_input(
+prompt = st.chat_input(
     "Ask your question..."
-):
-
-    if not st.session_state.uploaded:
-
-        st.warning(
-            "Please upload a document first."
-        )
-
-    else:
-
-        # Add user message
-
-        st.session_state.messages.append(
-            {
-                "role": "user",
-                "content": prompt
-            }
-        )
-
-        with st.chat_message("user"):
-
-            st.markdown(prompt)
+)
 
 
-        # Assistant response
+if prompt:
 
-        with st.chat_message("assistant"):
+    # Remove message immediately
 
-            message_placeholder = st.empty()
+    st.session_state.status_message = None
 
-            full_response = ""
 
-            try:
+    # Add user message
 
-                response = requests.get(
-                    f"{API_URL}/query",
-                    params={
-                        "query": prompt
-                    },
-                    stream=True
-                )
+    st.session_state.messages.append(
+        {
+            "role": "user",
+            "content": prompt
+        }
+    )
 
-                for chunk in response.iter_content(
-                    chunk_size=1024
-                ):
 
-                    if chunk:
+    with st.chat_message("user"):
 
-                        text = chunk.decode(
-                            "utf-8"
-                        )
+        st.markdown(prompt)
 
-                        full_response += text
 
-                        message_placeholder.markdown(
-                            full_response + "▌"
-                        )
+    with st.chat_message("assistant"):
 
-                message_placeholder.markdown(
-                    full_response
-                )
+        placeholder = st.empty()
 
-            except Exception as e:
+        try:
+
+            response = requests.get(
+                f"{API_URL}/query",
+                params={
+                    "query": prompt
+                }
+            )
+
+
+            if response.status_code == 200:
+
+                try:
+
+                    result = response.json()
+
+                    full_response = (
+                        f"{result.get('source','')}\n\n"
+                        f"{result.get('response','')}"
+                    )
+
+                except Exception:
+
+                    full_response = (
+                        "⚠️ Invalid response format."
+                    )
+
+            else:
 
                 full_response = (
-                    "⚠️ Error occurred."
+                    "⚠️ Query failed."
                 )
 
-                message_placeholder.markdown(
-                    full_response
-                )
+        except Exception:
+
+            full_response = (
+                "⚠️ Backend not reachable."
+            )
 
 
-        # Save assistant response
-
-        st.session_state.messages.append(
-            {
-                "role": "assistant",
-                "content": full_response
-            }
+        placeholder.markdown(
+            full_response
         )
+
+
+    st.session_state.messages.append(
+        {
+            "role": "assistant",
+            "content": full_response
+        }
+    )
