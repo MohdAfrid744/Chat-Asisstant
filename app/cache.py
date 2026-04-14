@@ -1,15 +1,20 @@
 import redis
-import json
 import numpy as np
-import faiss
+import pickle
 import os
+import faiss
 
-from sentence_transformers import SentenceTransformer
+from app.model_loader import (
+    embedding_model,
+    embedding_dimension
+)
 
+SIMILARITY_THRESHOLD = 0.65
 
-# =========================
-# REDIS
-# =========================
+CACHE_INDEX_PATH = "models/cache_index.bin"
+CACHE_DATA_PATH = "models/cache_data.pkl"
+
+# Redis
 
 redis_client = redis.Redis(
     host="localhost",
@@ -17,30 +22,8 @@ redis_client = redis.Redis(
     decode_responses=True
 )
 
-
 # =========================
-# MODEL (GPU ENABLED)
-# =========================
-
-model = SentenceTransformer(
-    "all-MiniLM-L6-v2"
-)
-
-
-# =========================
-# SETTINGS
-# =========================
-
-SIMILARITY_THRESHOLD = 0.65
-
-CACHE_INDEX_PATH = "models/cache_index.bin"
-CACHE_DATA_PATH = "models/cache_data.json"
-
-dimension = 384
-
-
-# =========================
-# LOAD / CREATE FAISS
+# LOAD CACHE
 # =========================
 
 if os.path.exists(CACHE_INDEX_PATH):
@@ -49,46 +32,40 @@ if os.path.exists(CACHE_INDEX_PATH):
         CACHE_INDEX_PATH
     )
 
-    print("Loaded semantic cache index.")
+    with open(
+        CACHE_DATA_PATH,
+        "rb"
+    ) as f:
+
+        cache_data = pickle.load(f)
+
+    print("Loaded semantic cache.")
 
 else:
 
     cache_index = faiss.IndexFlatIP(
-        dimension
+        embedding_dimension
     )
+
+    cache_data = []
 
     print("Created new semantic cache index.")
 
 
 # =========================
-# LOAD CACHE DATA
+# NORMALIZATION
 # =========================
 
-if os.path.exists(CACHE_DATA_PATH):
-
-    with open(
-        CACHE_DATA_PATH,
-        "r"
-    ) as f:
-
-        cache_data = json.load(f)
-
-else:
-
-    cache_data = []
-
-
-# =========================
-# NORMALIZE EMBEDDING
-# =========================
-
-def normalize(vec):
+def normalize_embedding(vec):
 
     vec = np.array(vec).astype("float32")
 
-    faiss.normalize_L2(vec)
+    norm = np.linalg.norm(vec)
 
-    return vec
+    if norm == 0:
+        return vec
+
+    return vec / norm
 
 
 # =========================
@@ -101,6 +78,8 @@ def check_exact_cache(query):
 
     if response:
 
+        print("⚡ Exact Cache Hit")
+
         return response
 
     return None
@@ -112,42 +91,35 @@ def check_exact_cache(query):
 
 def check_semantic_cache(query):
 
-    if cache_index.ntotal == 0:
-
+    if len(cache_data) == 0:
         return None
 
+    embedding = embedding_model.encode(query)
 
-    query_embedding = model.encode([query])
-
-    query_embedding = normalize(
-        query_embedding
+    embedding = normalize_embedding(
+        embedding
     )
 
+    embedding = np.array([embedding])
 
     distances, indices = cache_index.search(
-        query_embedding,
+        embedding,
         1
     )
-
 
     similarity = distances[0][0]
 
     print(
-        "Semantic similarity:",
-        similarity
+        f"Semantic similarity: {similarity}"
     )
-
 
     if similarity >= SIMILARITY_THRESHOLD:
 
         idx = indices[0][0]
 
-        if idx < len(cache_data):
+        print("⚡ Semantic Cache Hit")
 
-            print("⚡ Semantic Cache Hit")
-
-            return cache_data[idx]["response"]
-
+        return cache_data[idx]["response"]
 
     return None
 
@@ -158,58 +130,47 @@ def check_semantic_cache(query):
 
 def store_cache(query, response):
 
-    # Exact cache
-
     redis_client.set(
         query,
         response,
         ex=86400
     )
 
+    embedding = embedding_model.encode(query)
 
-    embedding = model.encode([query])
-
-    embedding = normalize(
+    embedding = normalize_embedding(
         embedding
     )
 
+    embedding = np.array([embedding])
 
-    cache_index.add(embedding)
-
-
-    cache_data.append({
-
-        "query": query,
-
-        "response": response
-
-    })
-
-
-    faiss.write_index(
-
-        cache_index,
-
-        CACHE_INDEX_PATH
-
+    cache_index.add(
+        embedding
     )
 
+    cache_data.append({
+        "query": query,
+        "response": response
+    })
+
+    os.makedirs(
+        "models",
+        exist_ok=True
+    )
+
+    faiss.write_index(
+        cache_index,
+        CACHE_INDEX_PATH
+    )
 
     with open(
-
         CACHE_DATA_PATH,
-
-        "w"
-
+        "wb"
     ) as f:
 
-        json.dump(
-
+        pickle.dump(
             cache_data,
-
             f
-
         )
-
 
     print("💾 Cached in FAISS.")
