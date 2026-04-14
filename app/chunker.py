@@ -1,81 +1,39 @@
-# =========================
-# SMART DYNAMIC CHUNKING
-# =========================
+# app/chunker.py
 
-def dynamic_chunk_params(text_length):
+def chunk_text(
+    text,
+    chunk_size=500,
+    overlap=50
+):
 
-    # Very small documents
+    """
+    Splits text into overlapping chunks.
 
-    if text_length < 1000:
+    Parameters:
+    text : str
+    chunk_size : int
+    overlap : int
 
-        return text_length, 0
-
-
-    # Small documents
-
-    elif text_length < 5000:
-
-        return 300, 50
-
-
-    # Medium documents
-
-    elif text_length < 20000:
-
-        return 500, 75
-
-
-    # Large documents
-
-    else:
-
-        return 800, 100
-
-
-def chunk_text(text):
-
-    if not text:
-
-        return []
-
-
-    text_length = len(text)
-
-
-    chunk_size, overlap = dynamic_chunk_params(
-        text_length
-    )
-
-
-    print(
-        f"Dynamic chunk_size={chunk_size}, overlap={overlap}"
-    )
-
+    Returns:
+    List[str]
+    """
 
     chunks = []
 
     start = 0
 
+    text_length = len(text)
 
     while start < text_length:
 
         end = start + chunk_size
 
-        chunk = text[start:end].strip()
+        chunk = text[start:end]
 
-        if chunk:
+        if chunk.strip():
 
             chunks.append(chunk)
 
-
-        if overlap == 0:
-
-            break
-
-
-        start += (
-            chunk_size - overlap
-        )
-
+        start += chunk_size - overlap
 
     return chunks
