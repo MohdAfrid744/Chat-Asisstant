@@ -1,78 +1,38 @@
+# app/vector_store.py
+
 import faiss
 import numpy as np
 import pickle
 import os
-import torch
 
-from sentence_transformers import SentenceTransformer
-
-
-# =========================
-# DEVICE SETUP (GPU/CPU)
-# =========================
-
-device = "cuda" if torch.cuda.is_available() else "cpu"
-
-print(f"Embedding device: {device}")
+from app.model_loader import embedding_model
 
 
-# =========================
-# MODEL LOAD
-# =========================
-
-model = SentenceTransformer(
-    "all-MiniLM-L6-v2",
-    device=device
-)
+dimension = embedding_model.get_embedding_dimension()
 
 
-# =========================
-# FILE PATHS
-# =========================
-
-INDEX_PATH = "models/faiss_index.bin"
-DOCS_PATH = "models/docs.pkl"
-
-
-# =========================
-# LOAD OR CREATE INDEX
-# =========================
-
-dimension = 384
-
-if os.path.exists(INDEX_PATH):
-
-    print("Loading existing FAISS index...")
+if os.path.exists("models/faiss_index.bin"):
 
     index = faiss.read_index(
-        INDEX_PATH
+        "models/faiss_index.bin"
     )
-
-else:
-
-    print("Creating new FAISS index...")
-
-    index = faiss.IndexFlatL2(
-        dimension
-    )
-
-
-# =========================
-# LOAD DOCUMENTS
-# =========================
-
-if os.path.exists(DOCS_PATH):
 
     with open(
-        DOCS_PATH,
+        "models/docs.pkl",
         "rb"
     ) as f:
 
         documents = pickle.load(f)
 
+    print("Loading existing FAISS index...")
+
 else:
 
+    index = faiss.IndexFlatL2(dimension)
+
     documents = []
+
+    print("Creating new FAISS index...")
 
 
 # =========================
@@ -83,51 +43,34 @@ def add_documents(chunks):
 
     global documents
 
-    if not chunks:
-
-        return
-
-
     print(
         f"Generating embeddings for {len(chunks)} chunks..."
     )
 
-
-    embeddings = model.encode(
+    embeddings = embedding_model.encode(
         chunks,
         batch_size=16,
         show_progress_bar=True
     )
 
-
     index.add(
         np.array(embeddings)
     )
 
-
-    documents.extend(
-        chunks
-    )
-
+    documents.extend(chunks)
 
     os.makedirs(
         "models",
         exist_ok=True
     )
 
-
-    # Save FAISS index
-
     faiss.write_index(
         index,
-        INDEX_PATH
+        "models/faiss_index.bin"
     )
 
-
-    # Save documents
-
     with open(
-        DOCS_PATH,
+        "models/docs.pkl",
         "wb"
     ) as f:
 
@@ -136,31 +79,23 @@ def add_documents(chunks):
             f
         )
 
-
     print("FAISS index updated.")
 
 
 # =========================
-# RETRIEVE FUNCTION
+# RETRIEVE
 # =========================
 
-def retrieve(query, top_k=3):
+def retrieve(query, top_k=5):
 
-    if index.ntotal == 0:
-
-        return []
-
-
-    query_embedding = model.encode(
+    query_embedding = embedding_model.encode(
         [query]
     )
-
 
     distances, indices = index.search(
         np.array(query_embedding),
         top_k
     )
-
 
     results = []
 
@@ -171,6 +106,5 @@ def retrieve(query, top_k=3):
             results.append(
                 documents[idx]
             )
-
 
     return results
