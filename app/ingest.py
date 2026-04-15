@@ -18,7 +18,7 @@ from app.bm25_store import build_bm25_index
 
 def extract_text(file_path):
 
-    ext = os.path.splitext(file_path)[1]
+    ext = os.path.splitext(file_path)[1].lower()
 
     text = ""
 
@@ -77,15 +77,26 @@ def dynamic_chunking(text):
         chunk_size = 800
         overlap = 120
 
+
     print(
-        f"Dynamic chunk_size={chunk_size}, overlap={overlap}"
+        f"Dynamic chunk_size={chunk_size}, "
+        f"overlap={overlap}"
     )
 
-    return chunk_text(
+    chunks = chunk_text(
         text,
         chunk_size,
         overlap
     )
+
+
+    if not chunks:
+
+        raise ValueError(
+            "No chunks created."
+        )
+
+    return chunks
 
 
 # =========================
@@ -96,22 +107,35 @@ def generate_summary(text):
 
     print("\nGenerating summary...")
 
+
+    # Skip very small docs
+
     if len(text) < 1500:
 
-        print("Short document — skipping summary.")
+        print(
+            "Short document — skipping summary."
+        )
 
-        return "Short document — summary skipped."
+        return (
+            "Short document — summary skipped."
+        )
 
 
-    short_text = text[:2000]
+    # Use adaptive summary length
+
+    summary_length = int(len(text) * 0.25)
+
+    summary_text = text[:summary_length]
+
 
     prompt = f"""
 Summarize the following document
 in 5–7 clear sentences.
 
 Document:
-{short_text}
+{summary_text}
 """
+
 
     try:
 
@@ -127,16 +151,21 @@ Document:
 
         result = response.json()
 
-        return result.get(
+        summary = result.get(
             "response",
             "Summary generation failed."
         )
+
+        return summary
+
 
     except Exception as e:
 
         print("Summary Error:", e)
 
-        return "Summary generation failed."
+        return (
+            "Summary generation failed."
+        )
 
 
 # =========================
@@ -147,7 +176,9 @@ def ingest_document(file_path):
 
     start_time = time.time()
 
-    print("\n========== INGEST START ==========")
+    print(
+        "\n========== INGEST START =========="
+    )
 
 
     # Step 1 — Extract text
@@ -162,7 +193,10 @@ def ingest_document(file_path):
             "No text extracted."
         )
 
-    print("Text length:", len(text))
+    print(
+        "Text length:",
+        len(text)
+    )
 
 
     # Step 2 — Chunking
@@ -171,7 +205,10 @@ def ingest_document(file_path):
 
     chunks = dynamic_chunking(text)
 
-    print("Chunks created:", len(chunks))
+    print(
+        "Chunks created:",
+        len(chunks)
+    )
 
 
     # Save metadata
@@ -179,11 +216,15 @@ def ingest_document(file_path):
     metadata = {
 
         "chunk_count": len(chunks),
+
         "text_length": len(text)
 
     }
 
-    os.makedirs("data", exist_ok=True)
+    os.makedirs(
+        "data",
+        exist_ok=True
+    )
 
     with open(
         "data/doc_metadata.json",
@@ -230,8 +271,10 @@ def ingest_document(file_path):
 
     total_time = time.time() - start_time
 
+
     print(
-        f"\n✅ INGEST COMPLETE ({total_time:.2f}s)"
+        f"\n✅ INGEST COMPLETE "
+        f"({total_time:.2f}s)"
     )
 
     return total_time
