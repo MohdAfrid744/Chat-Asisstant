@@ -1,9 +1,7 @@
-# app/chunker.py
-
 def chunk_text(
     text,
-    chunk_size=500,
-    overlap=50
+    chunk_size,
+    overlap
 ):
 
     """
@@ -24,6 +22,8 @@ def chunk_text(
 
     text_length = len(text)
 
+    step = chunk_size - overlap
+
     while start < text_length:
 
         end = start + chunk_size
@@ -34,6 +34,6 @@ def chunk_text(
 
             chunks.append(chunk)
 
-        start += chunk_size - overlap
+        start += step
 
     return chunks
