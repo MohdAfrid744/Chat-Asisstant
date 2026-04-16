@@ -1,25 +1,31 @@
 import pickle
-from rank_bm25 import BM25Okapi
 import os
 
+from rank_bm25 import BM25Okapi
 
-# =========================
-# BUILD BM25 INDEX
-# =========================
+
+BM25_PATH = "data/bm25.pkl"
+CHUNK_PATH = "data/chunks.pkl"
+
 
 def build_bm25_index(chunks):
 
-    tokenized_chunks = [
+    tokenized = [
+
         chunk.split()
+
         for chunk in chunks
+
     ]
 
-    bm25 = BM25Okapi(tokenized_chunks)
+    bm25 = BM25Okapi(tokenized)
+
 
     os.makedirs("data", exist_ok=True)
 
+
     with open(
-        "data/bm25.pkl",
+        BM25_PATH,
         "wb"
     ) as f:
 
@@ -28,10 +34,9 @@ def build_bm25_index(chunks):
             f
         )
 
-    # Save chunks too
 
     with open(
-        "data/chunks.pkl",
+        CHUNK_PATH,
         "wb"
     ) as f:
 
@@ -41,53 +46,49 @@ def build_bm25_index(chunks):
         )
 
 
-# =========================
-# BM25 SEARCH
-# =========================
+def bm25_search(query, top_k=5):
 
-def bm25_search(query, top_k=3):
-
-    if not os.path.exists("data/bm25.pkl"):
+    if not os.path.exists(BM25_PATH):
 
         return []
 
+
     with open(
-        "data/bm25.pkl",
+        BM25_PATH,
         "rb"
     ) as f:
 
         bm25 = pickle.load(f)
 
+
     with open(
-        "data/chunks.pkl",
+        CHUNK_PATH,
         "rb"
     ) as f:
 
         chunks = pickle.load(f)
 
 
-    tokenized_query = query.split()
-
     scores = bm25.get_scores(
-        tokenized_query
+        query.split()
     )
 
 
-    ranked_indices = sorted(
+    ranked = sorted(
+
         range(len(scores)),
+
         key=lambda i: scores[i],
+
         reverse=True
+
     )[:top_k]
 
 
-    results = []
+    return [
 
-    for idx in ranked_indices:
+        chunks[i]
 
-        if idx < len(chunks):
+        for i in ranked
 
-            results.append(
-                chunks[idx]
-            )
-
-    return results
+    ]
