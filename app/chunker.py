@@ -1,30 +1,72 @@
-def chunk_text(
+import re
+
+
+# =========================
+# HEADING-AWARE CHUNKING
+# =========================
+
+def split_by_headings(text):
+
+    """
+    Split markdown/text by headings.
+
+    Supports:
+    # Heading
+    ## Heading
+    ### Heading
+    """
+
+    pattern = r"(#+\s.*)"
+
+    parts = re.split(pattern, text)
+
+    chunks = []
+
+    current_chunk = ""
+
+    for part in parts:
+
+        if re.match(pattern, part):
+
+            if current_chunk.strip():
+
+                chunks.append(
+                    current_chunk.strip()
+                )
+
+            current_chunk = part
+
+        else:
+
+            current_chunk += "\n" + part
+
+
+    if current_chunk.strip():
+
+        chunks.append(
+            current_chunk.strip()
+        )
+
+    return chunks
+
+
+# =========================
+# DYNAMIC FALLBACK CHUNKING
+# =========================
+
+def fallback_chunking(
     text,
-    chunk_size,
-    overlap
+    chunk_size=500,
+    overlap=80
 ):
-
-    """
-    Splits text into overlapping chunks.
-
-    Parameters:
-    text : str
-    chunk_size : int
-    overlap : int
-
-    Returns:
-    List[str]
-    """
 
     chunks = []
 
     start = 0
 
-    text_length = len(text)
+    length = len(text)
 
-    step = chunk_size - overlap
-
-    while start < text_length:
+    while start < length:
 
         end = start + chunk_size
 
@@ -34,6 +76,33 @@ def chunk_text(
 
             chunks.append(chunk)
 
-        start += step
+        start += chunk_size - overlap
 
     return chunks
+
+
+# =========================
+# MAIN CHUNK FUNCTION
+# =========================
+
+def chunk_text(text):
+
+    """
+    Smart chunking:
+
+    1. Try heading-aware
+    2. Fallback to dynamic
+    """
+
+    heading_chunks = split_by_headings(text)
+
+    if len(heading_chunks) > 1:
+
+        print("Using heading-aware chunking")
+
+        return heading_chunks
+
+
+    print("Using fallback chunking")
+
+    return fallback_chunking(text)
