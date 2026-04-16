@@ -1,16 +1,13 @@
-# streamlit_app.py
-
 import streamlit as st
 import requests
-
-
-API_URL = "http://127.0.0.1:8000"
+import os
 
 
 st.set_page_config(
     page_title="RAG Chat Assistant",
     layout="wide"
 )
+
 
 st.title("🤖 RAG Chat Assistant")
 
@@ -20,196 +17,205 @@ st.title("🤖 RAG Chat Assistant")
 # =========================
 
 if "messages" not in st.session_state:
+
     st.session_state.messages = []
 
-if "status_message" not in st.session_state:
-    st.session_state.status_message = None
+if "doc_ready" not in st.session_state:
 
-if "uploaded_filename" not in st.session_state:
-    st.session_state.uploaded_filename = None
+    st.session_state.doc_ready = False
 
 
 # =========================
-# FILE UPLOAD
+# SIDEBAR
 # =========================
 
-st.sidebar.title("📄 Upload Document")
+with st.sidebar:
 
-uploaded_file = st.sidebar.file_uploader(
-    "Upload File",
-    type=["pdf", "txt", "md"]
-)
+    st.header("📂 Controls")
 
 
-# Only upload once per file
+    # NEW CHAT
 
-if (
-    uploaded_file
-    and uploaded_file.name
-    != st.session_state.uploaded_filename
-):
-
-    files = {"file": uploaded_file}
-
-    with st.spinner("Processing document..."):
+    if st.button("🆕 New Chat"):
 
         try:
 
-            response = requests.post(
-                f"{API_URL}/ingest",
-                files=files
+            requests.post(
+                "http://localhost:8000/clear"
             )
 
-            if response.status_code == 200:
+        except:
+            pass
 
-                data = response.json()
+        st.session_state.messages = []
 
-                time_taken = data.get(
-                    "processing_time",
-                    0
-                )
+        st.session_state.doc_ready = False
 
-                st.session_state.status_message = (
-                    f"✅ Document ready "
-                    f"(Processed in {time_taken}s)"
-                )
+        st.rerun()
 
-                st.session_state.uploaded_filename = (
-                    uploaded_file.name
-                )
 
-            else:
+    st.divider()
 
-                st.session_state.status_message = (
-                    "⚠️ Upload failed."
-                )
 
-        except Exception:
+    # FILE UPLOAD
 
-            st.session_state.status_message = (
-                "⚠️ Backend not reachable."
+    uploaded_file = st.file_uploader(
+
+        "📄 Upload Document",
+
+        type=["pdf", "txt", "md"]
+
+    )
+
+
+    if uploaded_file:
+
+        os.makedirs("data", exist_ok=True)
+
+        file_path = f"data/{uploaded_file.name}"
+
+        with open(file_path, "wb") as f:
+
+            f.write(
+                uploaded_file.getbuffer()
             )
+
+
+        with st.spinner("Processing..."):
+
+            try:
+
+                response = requests.post(
+
+                    "http://localhost:8000/ingest",
+
+                    json={
+
+                        "file_path": file_path
+
+                    },
+
+                    timeout=600
+
+                )
+
+                result = response.json()
+
+
+                if result["status"] == "duplicate":
+
+                    st.warning(
+
+                        "⚠️ Document already processed."
+
+                    )
+
+                    st.session_state.doc_ready = True
+
+
+                else:
+
+                    st.success(
+
+                        f"✅ Document ready "
+                        f"(Processed in {result['time']}s)"
+
+                    )
+
+                    st.session_state.doc_ready = True
+
+
+            except:
+
+                st.error(
+
+                    "⚠️ Failed to process document."
+
+                )
+
+
+    st.divider()
+
+
+    # STATUS
+
+    if st.session_state.doc_ready:
+
+        st.success("✅ Ready to Query")
+
+    else:
+
+        st.warning("⚠️ Upload a document first")
 
 
 # =========================
-# STATUS MESSAGE
+# CHAT DISPLAY
 # =========================
 
-if st.session_state.status_message:
+for msg in st.session_state.messages:
 
-    st.success(
-        st.session_state.status_message
+    st.chat_message(
+        msg["role"]
+    ).write(
+        msg["content"]
     )
 
 
 # =========================
-# NEW CHAT BUTTON
+# CHAT INPUT
 # =========================
 
-if st.sidebar.button("🆕 New Chat"):
-
-    st.session_state.messages = []
-
-    st.session_state.status_message = None
-
-
-# =========================
-# DISPLAY CHAT
-# =========================
-
-for message in st.session_state.messages:
-
-    with st.chat_message(
-        message["role"]
-    ):
-        st.markdown(
-            message["content"]
-        )
-
-
-# =========================
-# USER INPUT
-# =========================
-
-prompt = st.chat_input(
+query = st.chat_input(
     "Ask your question..."
 )
 
 
-if prompt:
+if query:
 
-    # Remove message immediately
+    st.chat_message("user").write(query)
 
-    st.session_state.status_message = None
+    st.session_state.messages.append({
 
+        "role": "user",
 
-    # Add user message
+        "content": query
 
-    st.session_state.messages.append(
-        {
-            "role": "user",
-            "content": prompt
-        }
-    )
+    })
 
 
-    with st.chat_message("user"):
+    try:
 
-        st.markdown(prompt)
+        response = requests.get(
 
+            "http://localhost:8000/query",
 
-    with st.chat_message("assistant"):
+            params={"query": query},
 
-        placeholder = st.empty()
+            timeout=300
 
-        try:
-
-            response = requests.get(
-                f"{API_URL}/query",
-                params={
-                    "query": prompt
-                }
-            )
-
-
-            if response.status_code == 200:
-
-                try:
-
-                    result = response.json()
-
-                    full_response = (
-                        f"{result.get('source','')}\n\n"
-                        f"{result.get('response','')}"
-                    )
-
-                except Exception:
-
-                    full_response = (
-                        "⚠️ Invalid response format."
-                    )
-
-            else:
-
-                full_response = (
-                    "⚠️ Query failed."
-                )
-
-        except Exception:
-
-            full_response = (
-                "⚠️ Backend not reachable."
-            )
-
-
-        placeholder.markdown(
-            full_response
         )
 
+        result = response.json()
 
-    st.session_state.messages.append(
-        {
-            "role": "assistant",
-            "content": full_response
-        }
-    )
+        answer = result.get(
+
+            "response",
+
+            "No response."
+
+        )
+
+    except:
+
+        answer = "⚠️ Backend error."
+
+
+    st.chat_message("assistant").write(answer)
+
+    st.session_state.messages.append({
+
+        "role": "assistant",
+
+        "content": answer
+
+    })
