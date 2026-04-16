@@ -1,38 +1,45 @@
 # app/vector_store.py
 
-import faiss
-import numpy as np
-import pickle
 import os
+import faiss
+import pickle
 
 from app.model_loader import embedding_model
 
 
-dimension = embedding_model.get_embedding_dimension()
+INDEX_PATH = "models/faiss_index.bin"
+DOC_PATH = "models/docs.pkl"
 
 
-if os.path.exists("models/faiss_index.bin"):
+dimension = embedding_model.get_sentence_embedding_dimension()
+
+
+# =========================
+# LOAD INDEX
+# =========================
+
+if os.path.exists(INDEX_PATH):
 
     index = faiss.read_index(
-        "models/faiss_index.bin"
+        INDEX_PATH
     )
 
     with open(
-        "models/docs.pkl",
+        DOC_PATH,
         "rb"
     ) as f:
 
         documents = pickle.load(f)
 
-    print("Loading existing FAISS index...")
-
 else:
 
-    index = faiss.IndexFlatL2(dimension)
+    print("Creating new FAISS index...")
+
+    index = faiss.IndexFlatIP(
+        dimension
+    )
 
     documents = []
-
-    print("Creating new FAISS index...")
 
 
 # =========================
@@ -41,45 +48,45 @@ else:
 
 def add_documents(chunks):
 
-    global documents
-
-    print(
-        f"Generating embeddings for {len(chunks)} chunks..."
-    )
-
     embeddings = embedding_model.encode(
         chunks,
-        batch_size=16,
-        show_progress_bar=True
+        batch_size=16
     )
 
-    index.add(
-        np.array(embeddings)
-    )
+    index.add(embeddings)
 
     documents.extend(chunks)
 
-    os.makedirs(
-        "models",
-        exist_ok=True
-    )
+    save_index()
 
-    faiss.write_index(
-        index,
-        "models/faiss_index.bin"
-    )
 
-    with open(
-        "models/docs.pkl",
-        "wb"
-    ) as f:
+# =========================
+# HEADING BOOST
+# =========================
 
-        pickle.dump(
-            documents,
-            f
-        )
+def heading_boost(query, chunk):
 
-    print("FAISS index updated.")
+    boost = 0
+
+    keywords = [
+
+        "objective",
+        "purpose",
+        "goal",
+        "introduction",
+        "summary"
+
+    ]
+
+    for word in keywords:
+
+        if word in query.lower():
+
+            if word in chunk.lower():
+
+                boost += 0.25
+
+    return boost
 
 
 # =========================
@@ -92,19 +99,69 @@ def retrieve(query, top_k=5):
         [query]
     )
 
-    distances, indices = index.search(
-        np.array(query_embedding),
-        top_k
+    D, I = index.search(
+        query_embedding,
+        top_k * 2
     )
 
-    results = []
+    scored = []
 
-    for idx in indices[0]:
+    for score, idx in zip(D[0], I[0]):
 
         if idx < len(documents):
 
-            results.append(
-                documents[idx]
+            chunk = documents[idx]
+
+            boost = heading_boost(
+                query,
+                chunk
             )
 
+            final_score = score + boost
+
+            scored.append(
+
+                (final_score, chunk)
+
+            )
+
+    scored.sort(
+        key=lambda x: x[0],
+        reverse=True
+    )
+
+    results = [
+
+        chunk
+        for _, chunk in scored[:top_k]
+
+    ]
+
     return results
+
+
+# =========================
+# SAVE INDEX
+# =========================
+
+def save_index():
+
+    os.makedirs(
+        "models",
+        exist_ok=True
+    )
+
+    faiss.write_index(
+        index,
+        INDEX_PATH
+    )
+
+    with open(
+        DOC_PATH,
+        "wb"
+    ) as f:
+
+        pickle.dump(
+            documents,
+            f
+        )
