@@ -1,20 +1,27 @@
+# app/cache.py
+
 import redis
 import numpy as np
 import pickle
 import os
 import faiss
 
-from app.model_loader import (
-    embedding_model,
-    embedding_dimension
-)
+from app.model_loader import embedding_model
 
-SIMILARITY_THRESHOLD = 0.65
+
+# =========================
+# CONFIG
+# =========================
+
+SIMILARITY_THRESHOLD = 0.48
 
 CACHE_INDEX_PATH = "models/cache_index.bin"
 CACHE_DATA_PATH = "models/cache_data.pkl"
 
-# Redis
+
+# =========================
+# REDIS CONNECTION
+# =========================
 
 redis_client = redis.Redis(
     host="localhost",
@@ -22,9 +29,37 @@ redis_client = redis.Redis(
     decode_responses=True
 )
 
+
 # =========================
-# LOAD CACHE
+# NORMALIZE QUERY
 # =========================
+
+def normalize_query(query):
+
+    return query.lower().strip()
+
+
+# =========================
+# NORMALIZE EMBEDDING
+# =========================
+
+def normalize_embedding(vec):
+
+    vec = np.array(vec).astype("float32")
+
+    norm = np.linalg.norm(vec)
+
+    if norm == 0:
+        return vec
+
+    return vec / norm
+
+
+# =========================
+# LOAD CACHE INDEX
+# =========================
+
+dimension = embedding_model.get_sentence_embedding_dimension()
 
 if os.path.exists(CACHE_INDEX_PATH):
 
@@ -44,7 +79,7 @@ if os.path.exists(CACHE_INDEX_PATH):
 else:
 
     cache_index = faiss.IndexFlatIP(
-        embedding_dimension
+        dimension
     )
 
     cache_data = []
@@ -53,26 +88,12 @@ else:
 
 
 # =========================
-# NORMALIZATION
-# =========================
-
-def normalize_embedding(vec):
-
-    vec = np.array(vec).astype("float32")
-
-    norm = np.linalg.norm(vec)
-
-    if norm == 0:
-        return vec
-
-    return vec / norm
-
-
-# =========================
-# EXACT CACHE
+# EXACT CACHE CHECK
 # =========================
 
 def check_exact_cache(query):
+
+    query = normalize_query(query)
 
     response = redis_client.get(query)
 
@@ -86,7 +107,7 @@ def check_exact_cache(query):
 
 
 # =========================
-# SEMANTIC CACHE
+# SEMANTIC CACHE CHECK
 # =========================
 
 def check_semantic_cache(query):
@@ -94,7 +115,11 @@ def check_semantic_cache(query):
     if len(cache_data) == 0:
         return None
 
-    embedding = embedding_model.encode(query)
+    query = normalize_query(query)
+
+    embedding = embedding_model.encode(
+        query
+    )
 
     embedding = normalize_embedding(
         embedding
@@ -130,13 +155,21 @@ def check_semantic_cache(query):
 
 def store_cache(query, response):
 
+    query = normalize_query(query)
+
+    # Exact Cache
+
     redis_client.set(
         query,
         response,
         ex=86400
     )
 
-    embedding = embedding_model.encode(query)
+    # Semantic Cache
+
+    embedding = embedding_model.encode(
+        query
+    )
 
     embedding = normalize_embedding(
         embedding
@@ -149,8 +182,10 @@ def store_cache(query, response):
     )
 
     cache_data.append({
+
         "query": query,
         "response": response
+
     })
 
     os.makedirs(
@@ -174,3 +209,29 @@ def store_cache(query, response):
         )
 
     print("💾 Cached in FAISS.")
+
+
+# =========================
+# CLEAR CACHE
+# =========================
+
+def clear_cache():
+
+    redis_client.flushall()
+
+    global cache_index
+    global cache_data
+
+    cache_index = faiss.IndexFlatIP(
+        dimension
+    )
+
+    cache_data = []
+
+    if os.path.exists(CACHE_INDEX_PATH):
+        os.remove(CACHE_INDEX_PATH)
+
+    if os.path.exists(CACHE_DATA_PATH):
+        os.remove(CACHE_DATA_PATH)
+
+    print("🧹 Cache cleared.")
