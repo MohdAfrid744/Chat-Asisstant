@@ -2,7 +2,6 @@
 
 import time
 import requests
-import numpy as np
 
 from app.vector_store import retrieve
 from app.bm25_store import bm25_search
@@ -19,114 +18,93 @@ from app.memory import (
 )
 
 from app.logger import log_event
-from app.model_loader import embedding_model
 
 
 # =========================
 # CONFIG
 # =========================
 
-MIN_CONTEXT_REQUIRED = 1
-
-MIN_THRESHOLD = 0.20
-MAX_THRESHOLD = 0.40
+TOP_K_CONTEXT = 3
 
 
 # =========================
-# COSINE SIMILARITY
+# QUERY NORMALIZATION
 # =========================
 
-def cosine_similarity(a, b):
+def normalize_query(query):
 
-    a = a / np.linalg.norm(a)
-    b = b / np.linalg.norm(b)
+    """
+    Ensures consistent matching
+    for cache lookups
+    """
 
-    return np.dot(a, b)
-
-
-# =========================
-# ADAPTIVE THRESHOLD
-# =========================
-
-def compute_dynamic_threshold(similarities):
-
-    if not similarities:
-        return 0.25
-
-    chunk_count = len(similarities)
-
-    avg_sim = np.mean(similarities)
-
-    if chunk_count < 10:
-
-        threshold = 0.20
-
-    else:
-
-        threshold = avg_sim * 0.6
-
-    threshold = max(
-        MIN_THRESHOLD,
-        min(MAX_THRESHOLD, threshold)
-    )
-
-    print(f"Average similarity: {avg_sim:.3f}")
-    print(f"Dynamic threshold: {threshold:.3f}")
-
-    return threshold
+    return query.strip().lower()
 
 
 # =========================
-# CONTEXT FILTER
+# QUERY COMPRESSION
 # =========================
 
-def adaptive_filter(query, chunks):
+def compress_query(query):
 
-    if not chunks:
-        return []
+    """
+    Fix short queries like:
 
-    query_emb = embedding_model.encode(query)
+    'objective'
+    'summary'
+    """
 
-    chunk_embeddings = embedding_model.encode(
-        chunks
-    )
+    words = query.split()
 
-    similarities = []
+    if len(words) <= 2:
 
-    for chunk_emb in chunk_embeddings:
+        query = query + " of this report"
 
-        sim = cosine_similarity(
-            query_emb,
-            chunk_emb
-        )
+    return query
 
-        similarities.append(sim)
 
-    threshold = compute_dynamic_threshold(
-        similarities
-    )
+# =========================
+# QUERY EXPANSION
+# =========================
 
-    filtered = []
+def expand_query(query):
 
-    for i, sim in enumerate(similarities):
+    """
+    Adds semantic keywords
+    improves retrieval accuracy
+    """
 
-        if sim >= threshold:
+    expanded = query
 
-            filtered.append(
-                chunks[i]
-            )
+    q = query.lower()
 
-    if len(filtered) < MIN_CONTEXT_REQUIRED:
+    if "objective" in q:
 
-        print("Fallback activated.")
+        expanded += " purpose goal intent aim"
 
-        return chunks[:3]
+    if "summary" in q:
 
-    print(
-        f"Filtered {len(filtered)} relevant chunks"
-    )
+        expanded += " overview conclusion highlights"
 
-    return filtered[:3]
+    if "introduction" in q:
+
+        expanded += " background overview start"
+
+    if "method" in q:
+
+        expanded += " process approach workflow"
+
+    if "result" in q:
+
+        expanded += " outcome findings output"
+
+    if "conclusion" in q:
+
+        expanded += " summary final remarks"
+
+    print("Expanded query:", expanded)
+
+    return expanded
 
 
 # =========================
@@ -135,27 +113,42 @@ def adaptive_filter(query, chunks):
 
 def hybrid_retrieve(query):
 
+    # Step 1 — Compression
+
+    query = compress_query(query)
+
+    # Step 2 — Expansion
+
+    query = expand_query(query)
+
+    # Step 3 — Vector Retrieval
+
     vector_results = retrieve(
         query,
         top_k=5
     )
+
+    # Step 4 — BM25 Retrieval
 
     bm25_results = bm25_search(
         query,
         top_k=5
     )
 
+    # Step 5 — Merge
+
     combined = list(
+
         dict.fromkeys(
+
             vector_results +
             bm25_results
+
         )
+
     )
 
-    return adaptive_filter(
-        query,
-        combined
-    )
+    return combined[:TOP_K_CONTEXT]
 
 
 # =========================
@@ -169,8 +162,7 @@ def load_summary():
         with open(
             "data/summary.txt",
             "r",
-            encoding="utf-8",
-            errors="ignore"
+            encoding="utf-8"
         ) as f:
 
             return f.read()
@@ -181,94 +173,159 @@ def load_summary():
 
 
 # =========================
-# RESPONSE GENERATION
+# BUILD PROMPT
 # =========================
 
-def generate_response(query, context):
-
-    history = get_memory()
+def build_prompt(
+    query,
+    context,
+    summary,
+    history
+):
 
     history_text = ""
 
-    for item in history:
+    for item in history[-3:]:
 
         history_text += (
+
             f"User: {item['query']}\n"
             f"Assistant: {item['response']}\n\n"
+
         )
 
     context_text = "\n\n".join(context)
 
-    summary_text = load_summary()
-
-    has_context = len(context) > 0
-
 
     prompt = f"""
-You are an intelligent AI assistant.
+You are an intelligent assistant.
+
+Use the retrieved context to answer.
 
 Retrieved Context:
 {context_text}
 
-Document Summary:
-{summary_text}
+Summary:
+{summary}
 
-Conversation History:
+Conversation:
 {history_text}
 
 User Question:
 {query}
 
-RULES:
+Rules:
 
-1. If context exists — answer from context.
-2. Maintain conversation continuity.
-3. If context does NOT exist — answer using general knowledge.
-4. Do NOT mention context in response.
-5. Keep answers concise.
+1. Use retrieved context first
+2. Be precise and factual
+3. If context missing → answer using knowledge
 
 Answer:
 """
 
+    return prompt
 
-    response = requests.post(
-        "http://localhost:11434/api/generate",
-        json={
-            "model": "mistral",
-            "prompt": prompt,
-            "stream": False
-        }
+
+# =========================
+# GENERATE RESPONSE
+# =========================
+
+def generate_response(
+    query,
+    context
+):
+
+    history = get_memory()
+
+    summary = load_summary()
+
+    prompt = build_prompt(
+
+        query,
+        context,
+        summary,
+        history
+
     )
 
-    result = response.json()
 
-    answer = result.get(
-        "response",
-        "No response generated."
-    )
+    try:
 
+        response = requests.post(
 
-    # Only add NOTE if context missing
+            "http://localhost:11434/api/generate",
 
-    if not has_context:
+            json={
 
-        answer += (
-            "\n\nNOTE: "
-            "The output is generated entirely with AI."
+                "model": "mistral",
+
+                "prompt": prompt,
+
+                "stream": False,
+
+                # ⚡ Speed Control
+
+                "options": {
+
+                    "num_predict": 200
+
+                }
+
+            },
+
+            timeout=120
+
         )
 
+        result = response.json()
+
+        answer = result.get(
+
+            "response",
+            "No response generated."
+
+        )
+
+    except:
+
+        answer = "⚠️ Model error."
+
+
+    # =========================
+    # AI NOTE LOGIC (FIXED)
+    # =========================
+
+    if len(context) == 0:
+
+        answer += (
+
+            "\n\nNOTE: "
+            "The output is generated entirely with AI."
+
+        )
 
     return answer
 
 
 # =========================
-# MAIN QUERY
+# MAIN QUERY FUNCTION
 # =========================
 
 def process_query(query):
 
     start_time = time.time()
 
+
+    # =========================
+    # NORMALIZE QUERY
+    # =========================
+
+    query = normalize_query(query)
+
+
+    # =========================
+    # EXACT CACHE
+    # =========================
 
     cached = check_exact_cache(query)
 
@@ -277,6 +334,10 @@ def process_query(query):
         return cached, "⚡ Exact Cache Hit"
 
 
+    # =========================
+    # SEMANTIC CACHE
+    # =========================
+
     semantic = check_semantic_cache(query)
 
     if semantic:
@@ -284,41 +345,73 @@ def process_query(query):
         return semantic, "⚡ Semantic Cache Hit"
 
 
+    # =========================
+    # RETRIEVE CONTEXT
+    # =========================
+
     context = hybrid_retrieve(query)
 
 
-    print("\n========== RETRIEVED CHUNKS ==========")
+    print(
+        "\n========== RETRIEVED CHUNKS =========="
+    )
 
     for i, c in enumerate(context):
 
         print(f"\nChunk {i+1}:\n{c}")
 
-    print("\n======================================")
+    print(
+        "\n======================================"
+    )
 
+
+    # =========================
+    # GENERATE RESPONSE
+    # =========================
 
     response = generate_response(
+
         query,
         context
+
     )
 
+
+    # =========================
+    # STORE MEMORY
+    # =========================
 
     add_to_memory(
+
         query,
         response
+
     )
 
+
+    # =========================
+    # STORE CACHE
+    # =========================
 
     store_cache(
+
         query,
         response
+
     )
 
+
+    # =========================
+    # LOGGING
+    # =========================
 
     total_time = time.time() - start_time
 
     log_event(
+
         f"Query='{query}' | "
         f"Total={total_time:.2f}s"
+
     )
 
 
