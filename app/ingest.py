@@ -1,8 +1,7 @@
-# app/ingest.py
-
 import os
-import json
 import time
+import hashlib
+import json
 import requests
 
 from pypdf import PdfReader
@@ -12,13 +11,72 @@ from app.vector_store import add_documents
 from app.bm25_store import build_bm25_index
 
 
+HASH_FILE = "data/file_hash.json"
+
+
+# =========================
+# FILE HASH
+# =========================
+
+def compute_file_hash(file_path):
+
+    sha256 = hashlib.sha256()
+
+    with open(file_path, "rb") as f:
+
+        while True:
+
+            chunk = f.read(8192)
+
+            if not chunk:
+                break
+
+            sha256.update(chunk)
+
+    return sha256.hexdigest()
+
+
+def is_duplicate(file_hash):
+
+    if not os.path.exists(HASH_FILE):
+
+        return False
+
+    with open(HASH_FILE, "r") as f:
+
+        data = json.load(f)
+
+    return file_hash in data
+
+
+def store_hash(file_hash):
+
+    os.makedirs("data", exist_ok=True)
+
+    if os.path.exists(HASH_FILE):
+
+        with open(HASH_FILE, "r") as f:
+
+            data = json.load(f)
+
+    else:
+
+        data = []
+
+    data.append(file_hash)
+
+    with open(HASH_FILE, "w") as f:
+
+        json.dump(data, f)
+
+
 # =========================
 # TEXT EXTRACTION
 # =========================
 
 def extract_text(file_path):
 
-    ext = os.path.splitext(file_path)[1].lower()
+    ext = os.path.splitext(file_path)[1]
 
     text = ""
 
@@ -55,87 +113,22 @@ def extract_text(file_path):
 
 
 # =========================
-# DYNAMIC CHUNKING
-# =========================
-
-def dynamic_chunking(text):
-
-    text_length = len(text)
-
-    if text_length < 2000:
-
-        chunk_size = 300
-        overlap = 50
-
-    elif text_length < 10000:
-
-        chunk_size = 500
-        overlap = 80
-
-    else:
-
-        chunk_size = 800
-        overlap = 120
-
-
-    print(
-        f"Dynamic chunk_size={chunk_size}, "
-        f"overlap={overlap}"
-    )
-
-    chunks = chunk_text(
-        text,
-        chunk_size,
-        overlap
-    )
-
-
-    if not chunks:
-
-        raise ValueError(
-            "No chunks created."
-        )
-
-    return chunks
-
-
-# =========================
 # SUMMARY GENERATION
 # =========================
 
 def generate_summary(text):
 
-    print("\nGenerating summary...")
-
-
-    # Skip very small docs
-
     if len(text) < 1500:
 
-        print(
-            "Short document — skipping summary."
-        )
+        return "Short document."
 
-        return (
-            "Short document — summary skipped."
-        )
-
-
-    # Use adaptive summary length
-
-    summary_length = int(len(text) * 0.25)
-
-    summary_text = text[:summary_length]
-
+    short_text = text[:3000]
 
     prompt = f"""
-Summarize the following document
-in 5–7 clear sentences.
+Summarize this document briefly.
 
-Document:
-{summary_text}
+{short_text}
 """
-
 
     try:
 
@@ -151,75 +144,78 @@ Document:
 
         result = response.json()
 
-        summary = result.get(
+        return result.get(
             "response",
-            "Summary generation failed."
+            "Summary failed."
         )
 
-        return summary
+    except:
 
-
-    except Exception as e:
-
-        print("Summary Error:", e)
-
-        return (
-            "Summary generation failed."
-        )
+        return "Summary generation failed."
 
 
 # =========================
-# MAIN INGEST
+# MAIN INGEST FUNCTION
 # =========================
 
 def ingest_document(file_path):
 
     start_time = time.time()
 
-    print(
-        "\n========== INGEST START =========="
-    )
+    print("\n========== INGEST START ==========")
 
 
-    # Step 1 — Extract text
+    # HASH CHECK
 
-    print("\nStep 1: Extracting text...")
+    file_hash = compute_file_hash(file_path)
+
+    if is_duplicate(file_hash):
+
+        print("Duplicate file detected.")
+
+        return {
+            "status": "duplicate",
+            "time": 0
+        }
+
+
+    # TEXT EXTRACTION
+
+    print("Step 1: Extracting text...")
 
     text = extract_text(file_path)
 
-    if not text:
-
-        raise ValueError(
-            "No text extracted."
-        )
-
-    print(
-        "Text length:",
-        len(text)
-    )
+    print("Text length:", len(text))
 
 
-    # Step 2 — Chunking
+    # CHUNKING
 
-    print("\nStep 2: Chunking text...")
+    print("Step 2: Chunking text...")
 
-    chunks = dynamic_chunking(text)
+    chunks = chunk_text(text)
 
-    print(
-        "Chunks created:",
-        len(chunks)
-    )
+    print("Chunks created:", len(chunks))
 
 
-    # Save metadata
+    # VECTOR STORE
 
-    metadata = {
+    print("Step 3: Creating embeddings...")
 
-        "chunk_count": len(chunks),
+    add_documents(chunks)
 
-        "text_length": len(text)
 
-    }
+    # BM25
+
+    print("Step 4: Building BM25 index...")
+
+    build_bm25_index(chunks)
+
+
+    # SUMMARY
+
+    print("Step 5: Generating summary...")
+
+    summary = generate_summary(text)
 
     os.makedirs(
         "data",
@@ -227,54 +223,26 @@ def ingest_document(file_path):
     )
 
     with open(
-        "data/doc_metadata.json",
-        "w"
-    ) as f:
-
-        json.dump(metadata, f)
-
-
-    # Step 3 — Embeddings
-
-    print("\nStep 3: Creating embeddings...")
-
-    add_documents(chunks)
-
-    print("Embeddings created.")
-
-
-    # Step 4 — BM25
-
-    print("\nStep 4: Building BM25 index...")
-
-    build_bm25_index(chunks)
-
-    print("BM25 built.")
-
-
-    # Step 5 — Summary
-
-    print("\nStep 5: Generating summary...")
-
-    summary = generate_summary(text)
-
-
-    with open(
         "data/summary.txt",
         "w",
-        encoding="utf-8",
-        errors="ignore"
+        encoding="utf-8"
     ) as f:
 
         f.write(summary)
+
+
+    store_hash(file_hash)
 
 
     total_time = time.time() - start_time
 
 
     print(
-        f"\n✅ INGEST COMPLETE "
-        f"({total_time:.2f}s)"
+        f"\n✅ INGEST COMPLETE ({total_time:.2f}s)"
     )
 
-    return total_time
+
+    return {
+        "status": "processed",
+        "time": round(total_time, 2)
+    }
