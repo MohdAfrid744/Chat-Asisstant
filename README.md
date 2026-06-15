@@ -1,4 +1,4 @@
-# 🧠 Offline RAG Chat Assistant
+# 🧠 Context Aware Chat Assistant
 
 > A production-style **Offline Retrieval-Augmented Generation (RAG) Chatbot** with hybrid search, multi-level caching, GPU acceleration, and conversational memory — built to simulate real-world enterprise AI architectures.
 
